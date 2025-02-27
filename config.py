@@ -1,6 +1,9 @@
 import os
 import platform
 
+# OpenAI Configuration
+OPENAI_API_KEY = os.environ.get("OPEN_AI_API_KEY", "")
+
 # Poppler Configuration
 if platform.system() == "Windows":
     POPPLER_PATH = "C:\\Program Files\\poppler\\bin"
