@@ -71,7 +71,6 @@ class DataProcessor:
 
     def _format_data(self, content):
         """Extract and structure shipping information into CSV format with specific column assignments."""
-
         lines = content.splitlines()
         
         # --- Extract BOL Cube ---
@@ -108,11 +107,19 @@ class DataProcessor:
             print("Table header not found in the document.")
             return None
 
-        # --- Process Table Rows ---
-        # We assume table rows start immediately after the header until a line with "TOTAL CARTONS" or "SHIPPING INSTRUCTIONS:" appears.
+        # --- Process Table Rows and Extract Summary Totals ---
         rows = []
+        summary_total_pieces = ""
+        summary_total_weight = ""
         for line in lines[table_start+1:]:
-            if "TOTAL CARTONS" in line.upper() or "SHIPPING INSTRUCTIONS:" in line.upper():
+            if "TOTAL CARTONS" in line.upper():
+                # Expect a line like: "30 TOTAL CARTONS 2,160 TOTAL PIECES TOTAL VOL / WGT 595.2"
+                tokens = line.split()
+                if len(tokens) >= 11:
+                    summary_total_pieces = tokens[3].replace(',', '')  # Remove commas
+                    summary_total_weight = tokens[-1].replace(',', '')  # Remove commas
+                break
+            if "SHIPPING INSTRUCTIONS:" in line.upper():
                 break
             if not line.strip():
                 continue
@@ -120,25 +127,20 @@ class DataProcessor:
                 tokens = line.split()
                 if len(tokens) < 3:
                     continue
-                # Token assumptions:
-                cartons = tokens[0]
+                cartons = tokens[0].replace(',', '')  # Remove commas
                 style = tokens[1]
-                individual_pieces = tokens[2]
-                # Use the last token as the individual weight.
-                individual_weight = tokens[-1]
+                individual_pieces = tokens[2].replace(',', '')  # Remove commas
+                individual_weight = tokens[-1].replace(',', '')  # Remove commas
                 rows.append([cartons, bol_cube, individual_pieces, individual_weight, invoice_no, style])
             else:
-                # Skip continuation lines for simplicity.
                 continue
 
         # --- Generate CSV with Specific Column Mapping ---
-        # We need 26 columns corresponding to A-Z.
+        # Create a CSV with 28 columns (A-AB)
         output = io.StringIO()
         writer = csv.writer(output)
 
-        # Create header row with 26 columns (A to Z) and assign headers at the desired positions.
-        header = [""] * 26
-        # Fill in header names for the specific columns
+        header = [""] * 28
         header[0] = "RTS ID"
         header[1] = "RTS Status"
         header[2] = "Load #"
@@ -151,7 +153,7 @@ class DataProcessor:
         header[9] = "Order Date"              # Column J
         header[10] = "Customer"
         header[11] = "Ship To Name"           # Column L
-        header[12] = "Purchase Order No.#"    # Column M
+        header[12] = "Purchase Order No."    # Column M
         header[13] = "Cartons"                # Column N
         header[14] = "Start Date"             # Column O
         header[15] = "Cancel Date"            # Column P
@@ -165,21 +167,25 @@ class DataProcessor:
         header[23] = "Total Weight"
         header[24] = "Invoice No."            # Column Y
         header[25] = "Style"                  # Column Z
+        header[26] = "Release"                  # Column AA
+        header[27] = "Assigned Trucking Co."                  # Column AB
 
         # Ensure any header cell that is empty is explicitly an empty string.
         header = [col if col else "" for col in header]
         writer.writerow(header)
 
-        # Process each data row to assign values to the specific columns.
+        # Write each data row, adding the summary totals to the designated columns.
         for row_data in rows:
             # row_data is [cartons, bol_cube, individual_pieces, individual_weight, invoice_no, style]
-            data_row = [""] * 26
+            data_row = [""] * 28
             data_row[13] = row_data[0]  # Cartons -> Column N
             data_row[16] = row_data[1]  # BOL Cube -> Column Q
             data_row[20] = row_data[2]  # Individual Pieces -> Column U
             data_row[22] = row_data[3]  # Individual Weight -> Column W
             data_row[24] = row_data[4]  # Invoice No. -> Column Y
             data_row[25] = row_data[5]  # Style -> Column Z
+            data_row[21] = summary_total_pieces  # Total Pieces -> Column V (index 21)
+            data_row[23] = summary_total_weight  # Total Weight -> Column X (index 23)
             writer.writerow(data_row)
         
         return output.getvalue()

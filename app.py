@@ -1,5 +1,6 @@
 import os
 import csv
+import math
 from pathlib import Path
 import platform
 import pandas as pd
@@ -67,9 +68,21 @@ def process_pdf():
         return False, str(e)
 
 def process_csv_file(file_path):
-    """Process and map incoming CSV/Excel data to combined_data.csv"""
+    """Process and merge incoming CSV/Excel data with the PDF CSV by matching on:
+       - Invoice No.
+       - Style
+       - Cartons* (renamed to 'Cartons')
+       - Pieces* (renamed to 'Individual Pieces')
+       
+       Then update the following fields using the incoming headers:
+       - "Invoice Date" -> "Order Date"
+       - "Ship-to Name" -> "Ship To Name"
+       - "Order No." -> "Purchase Order No."
+       - "Delivery Date" -> "Start Date"
+       - "Cancel Date" -> "Cancel Date"
+    """
     try:
-        # Read input file - ensure all columns are read as strings
+        # Read input file as DataFrame with all columns as strings
         ext = os.path.splitext(file_path)[1].lower()
         if ext == ".csv":
             incoming_df = pd.read_csv(file_path, dtype=str)
@@ -78,71 +91,174 @@ def process_csv_file(file_path):
         else:
             return False, "Unsupported file extension"
         
-        # Define target column indices (0-based)
-        target_columns = {
-            'J': 9,   # Index for column J
-            'L': 11,  # Index for column L
-            'M': 12,  # Index for column M
-            'O': 14,  # Index for column O
-            'P': 15   # Index for column P
+        # Rename incoming columns used for matching.
+        incoming_df.rename(columns={"Cartons*": "Cartons", "Pieces*": "Individual Pieces"}, inplace=True)
+        
+        # Define mapping for additional fields using header names:
+        additional_mapping = {
+            "Invoice Date": "Order Date",
+            "Ship-to Name": "Ship To Name",
+            "Order No.": "Purchase Order No.",
+            "Delivery Date": "Start Date",
+            "Cancel Date": "Cancel Date"
         }
         
-        # Column mappings from source to target columns
-        column_mappings = {
-            'P': target_columns['J'],  # Invoice Date -> Column J
-            'D': target_columns['L'],  # Ship-to Name -> Column L
-            'F': target_columns['M'],  # Pieces* -> Column M
-            'M': target_columns['O'],  # Delivery Date -> Column O
-            'N': target_columns['P']   # Cancel Date -> Column P
-        }
-        
-        # Read existing combined_data.csv
+        # Read existing combined CSV (from PDF processing)
         combined_csv_path = os.path.join(app.config['UPLOAD_FOLDER'], OUTPUT_CSV_NAME)
         if not os.path.exists(combined_csv_path):
             return False, "No PDF data processed yet. Please process PDF first."
-            
         existing_df = pd.read_csv(combined_csv_path, dtype=str)
         
-        # Ensure DataFrame has enough columns
-        required_columns = max(target_columns.values()) + 1
-        while len(existing_df.columns) < required_columns:
-            col_name = chr(65 + len(existing_df.columns))  # A, B, C, etc.
-            existing_df[col_name] = ''
+        # Ensure matching columns exist in both DataFrames.
+        matching_columns = ["Invoice No.", "Style", "Cartons", "Individual Pieces"]
+        for col in matching_columns:
+            if col not in existing_df.columns:
+                return False, f"Column '{col}' not found in PDF CSV data."
+            if col not in incoming_df.columns:
+                return False, f"Column '{col}' not found in incoming file."
         
-        # Handle size mismatch
-        max_rows = min(len(existing_df), len(incoming_df))
+        # Create a composite match key in both DataFrames.
+        def create_match_key(df, cols):
+            return df[cols].fillna('').apply(
+                lambda row: "_".join([str(x).strip().replace(",", "").lower() for x in row]),
+                axis=1
+            )
         
-        # Map columns using numeric indices
-        for src_col, target_idx in column_mappings.items():
+        key_cols = matching_columns
+        existing_df["match_key"] = create_match_key(existing_df, key_cols)
+        incoming_df["match_key"] = create_match_key(incoming_df, key_cols)
+        
+        print("Existing DataFrame match keys:")
+        print(existing_df[["Invoice No.", "Style", "Cartons", "Individual Pieces", "match_key"]].head(20))
+        print("Incoming DataFrame match keys:")
+        print(incoming_df[["Invoice No.", "Style", "Cartons", "Individual Pieces", "match_key"]].head(20))
+        
+        # Merge: update existing_df rows using incoming additional mapping.
+        for idx, inc_row in incoming_df.iterrows():
+            key = inc_row["match_key"]
+            matches = existing_df[existing_df["match_key"] == key]
+            if not matches.empty:
+                existing_index = matches.index[0]
+                for inc_col, pdf_col in additional_mapping.items():
+                    if inc_col in incoming_df.columns and pdf_col in existing_df.columns:
+                        value = inc_row.get(inc_col, "")
+                        existing_df.at[existing_index, pdf_col] = value
+        
+        # Drop the match_key columns.
+        existing_df.drop(columns=["match_key"], inplace=True)
+        incoming_df.drop(columns=["match_key"], inplace=True)
+        
+        # Compute "Pallet" (Column T) as 1 pallet for every 80 of "BOL Cube" (Column Q), rounded up.
+        def compute_pallet(bol_cube):
             try:
-                # Convert source column letter to index (0-based)
-                src_idx = ord(src_col) - ord('A')
-                
-                if src_idx >= incoming_df.shape[1]:
-                    print(f"Warning: Source column {src_col} does not exist in incoming file")
-                    continue
-                
-                # Get source data as strings
-                src_data = incoming_df.iloc[:, src_idx].astype(str)
-                
-                # Map the data to the correct target column index
-                existing_df.iloc[:max_rows, target_idx] = src_data.iloc[:max_rows].values
-                
-            except Exception as e:
-                print(f"Warning: Error mapping column {src_col} to index {target_idx}: {str(e)}")
-                continue
+                value = float(str(bol_cube).replace(",", "").strip())
+                return math.ceil(value / 80)
+            except Exception:
+                return ""
         
-        # Save updated DataFrame
+        if "BOL Cube" in existing_df.columns:
+            existing_df["Pallet"] = existing_df["BOL Cube"].apply(compute_pallet)
+        else:
+            print("Warning: 'BOL Cube' column not found in existing CSV data.")
+        
+        # Compute "Burlington Cube" (Column S) as Pallet x 93 for rows where "Ship To Name" (Column L) contains "Burlington".
+        def compute_burlington(ship_to_name, pallet):
+            try:
+                if isinstance(ship_to_name, str) and "burlington" in ship_to_name.lower():
+                    if pd.isna(pallet) or pallet == "":
+                        return ""
+                    return int(pallet) * 93
+            except Exception:
+                return ""
+            return ""
+        
+        if "Ship To Name" in existing_df.columns and "Pallet" in existing_df.columns:
+            existing_df["Burlington Cube"] = existing_df.apply(lambda row: compute_burlington(row["Ship To Name"], row["Pallet"]), axis=1)
+        else:
+            print("Warning: 'Ship To Name' or 'Pallet' column not found in existing CSV data.")
+        
+        # Compute "Final Cube" (Column R) as Pallet x 130 for rows that do NOT contain "Burlington" in "Ship To Name".
+        def compute_final_cube(ship_to_name, pallet):
+            try:
+                if isinstance(ship_to_name, str) and "burlington" not in ship_to_name.lower():
+                    if pd.isna(pallet) or pallet == "":
+                        return ""
+                    return int(pallet) * 130
+            except Exception:
+                return ""
+            return ""
+        
+        if "Ship To Name" in existing_df.columns and "Pallet" in existing_df.columns:
+            existing_df["Final Cube"] = existing_df.apply(lambda row: compute_final_cube(row["Ship To Name"], row["Pallet"]), axis=1)
+        else:
+            print("Warning: 'Ship To Name' or 'Pallet' column not found in existing CSV data.")
+            
+        def parse_cancel_date(date_str):
+            """
+            Convert a string like '3152025' -> 03/15/2025 or
+            '2202025' -> 02/20/2025 into a datetime object.
+
+            Handles:
+            - 7-digit format:  MDDYYYY  (e.g. '3152025')
+            - 8-digit format: MMDDYYYY  (e.g. '03152025')
+            """
+            date_str = str(date_str).strip()
+
+            # 7-digit: MDDYYYY
+            if len(date_str) == 7:
+                month = date_str[0]             # e.g. '3'
+                day   = date_str[1:3]          # e.g. '15'
+                year  = date_str[3:]           # e.g. '2025'
+                try:
+                    return pd.to_datetime(f"{month.zfill(2)}/{day}/{year}", format="%m/%d/%Y")
+                except:
+                    return pd.NaT
+
+            # 8-digit: MMDDYYYY
+            elif len(date_str) == 8:
+                month = date_str[0:2]          # e.g. '03'
+                day   = date_str[2:4]          # e.g. '15'
+                year  = date_str[4:]           # e.g. '2025'
+                try:
+                    return pd.to_datetime(f"{month}/{day}/{year}", format="%m/%d/%Y")
+                except:
+                    return pd.NaT
+
+            return pd.NaT
+
+        # --- Sorting the output ---
+        # We want to sort so that the earliest cancel dates are at the top,
+        # but rows with the same "Ship To Name" are bunched together.
+        # We'll convert "Cancel Date" to datetime (ignoring errors),
+        # then group by "Ship To Name" and sort each group by "Cancel Date".
+        if "Cancel Date" in existing_df.columns and "Ship To Name" in existing_df.columns:
+            # Convert the raw strings in "Cancel Date" to datetime using the custom function:
+            existing_df["Cancel Date_dt"] = existing_df["Cancel Date"].apply(parse_cancel_date)
+
+            # Compute the earliest date per "Ship To Name":
+            existing_df["min_cancel_date"] = existing_df.groupby("Ship To Name")["Cancel Date_dt"].transform("min")
+
+            # Sort by earliest group date, then Ship To Name, then the individual date:
+            existing_df.sort_values(by=["min_cancel_date", "Ship To Name", "Cancel Date_dt"], inplace=True)
+
+            # Drop the helper columns:
+            existing_df.drop(columns=["min_cancel_date", "Cancel Date_dt"], inplace=True)
+
+        else:
+            print("Warning: 'Cancel Date' or 'Ship To Name' column not found; skipping sort.")
+        
+        
+        # Save updated DataFrame back to the combined CSV.
         existing_df.to_csv(combined_csv_path, index=False)
         
-        return True, f"CSV data mapped successfully (processed {max_rows} rows)"
+        return True, f"CSV data merged successfully (processed {len(incoming_df)} rows)"
         
     except pd.errors.EmptyDataError:
         return False, "The uploaded file is empty"
     except pd.errors.ParserError:
         return False, "Error parsing the file. Please ensure it's a valid CSV/Excel file"
     except Exception as e:
-        print(f"Error processing CSV: {str(e)}")  # For debugging
+        print(f"Error processing CSV: {str(e)}")
         return False, f"Error processing file: {str(e)}"
 
 
