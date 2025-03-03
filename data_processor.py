@@ -18,10 +18,25 @@ class DataProcessor:
             return False
 
         print(f"Found {len(txt_files)} TXT files to process")
+        print("Processing files in order:", txt_files)  # Debug: Show file processing order
         
         # First pass: Collect all data by invoice number
         for txt_file in txt_files:
             self._collect_invoice_data(txt_file)
+        
+        # Debug: Print collected invoice data summary
+        print("\nCollected Invoice Data Summary:")
+        for invoice_no, data in self.invoice_data.items():
+            print(f"\nInvoice {invoice_no}:")
+            print(f"Number of pages: {len(data['pages'])}")
+            print(f"Has totals: {data['has_totals']}")
+            for i, page in enumerate(data['pages']):
+                print(f"  Page {i+1}:")
+                print(f"    Rows: {len(page['rows'])}")
+                print(f"    Has totals: {page['has_totals']}")
+                if page['has_totals']:
+                    print(f"    Totals: {page['totals']}")
+                print(f"    BOL Cube: {page['bol_cube']}")
         
         # Second pass: Process collected data by invoice
         for invoice_no, pages_data in self.invoice_data.items():
@@ -79,25 +94,37 @@ class DataProcessor:
         has_totals = False
         totals = {'pieces': '', 'weight': ''}
 
+        # Debug: Print the first few lines to verify content
+        print("\nFirst few lines of content:")
+        for i, line in enumerate(lines[:10]):
+            print(f"Line {i+1}: {line}")
+
         # Find table start
         for i, line in enumerate(lines):
             if "CARTONS" in line.upper() and "STYLE" in line.upper() and "PIECES" in line.upper():
                 table_start = i
+                print(f"\nFound table header at line {i+1}: {line}")  # Debug
                 break
 
         if table_start is None:
+            print("WARNING: Table header not found in content")
             return None
 
         # Process rows and look for totals
+        print("\nProcessing table rows:")  # Debug
         for line in lines[table_start+1:]:
             if "TOTAL CARTONS" in line.upper():
                 has_totals = True
+                print(f"\nFound totals line: {line}")  # Debug
                 tokens = line.split()
+                print(f"Tokens in totals line: {tokens}")  # Debug
                 if len(tokens) >= 11:
                     totals['pieces'] = tokens[3].replace(',', '')
                     totals['weight'] = tokens[-1].replace(',', '')
+                    print(f"Extracted totals - Pieces: {totals['pieces']}, Weight: {totals['weight']}")  # Debug
                 break
             if "SHIPPING INSTRUCTIONS:" in line.upper():
+                print("\nReached shipping instructions - stopping table processing")  # Debug
                 break
             if not line.strip():
                 continue
@@ -109,6 +136,11 @@ class DataProcessor:
                     individual_pieces = tokens[2].replace(',', '')
                     individual_weight = tokens[-1].replace(',', '')
                     rows.append([cartons, individual_pieces, individual_weight, style])
+                    print(f"Added row: {[cartons, individual_pieces, individual_weight, style]}")  # Debug
+
+        print(f"\nExtracted {len(rows)} rows, has_totals: {has_totals}")  # Debug
+        if has_totals:
+            print(f"Final totals: {totals}")  # Debug
 
         return rows, has_totals, totals
 
@@ -129,6 +161,8 @@ class DataProcessor:
 
     def _process_invoice_data(self, invoice_no, data):
         """Process collected data for an invoice and create CSV."""
+        print(f"\nProcessing invoice {invoice_no}")  # Debug
+        
         if not data['has_totals']:
             print(f"Warning: No totals found for invoice {invoice_no}")
             return
@@ -136,21 +170,31 @@ class DataProcessor:
         # Get totals from the last page that has them
         totals = None
         bol_cube = ""
-        for page in reversed(data['pages']):
+        print("\nLooking for totals in pages (reverse order):")  # Debug
+        for i, page in enumerate(reversed(data['pages'])):
+            print(f"  Checking page {len(data['pages'])-i}")  # Debug
+            print(f"    Has totals: {page['has_totals']}")
             if page['has_totals']:
                 totals = page['totals']
                 bol_cube = page['bol_cube']
+                print(f"    Found totals: {totals}")
+                print(f"    BOL Cube: {bol_cube}")
                 break
 
         if not totals:
+            print(f"ERROR: No totals found in any page for invoice {invoice_no}")
             return
 
         # Collect all rows from all pages
         all_rows = []
-        for page in data['pages']:
+        print("\nCollecting rows from all pages:")  # Debug
+        for i, page in enumerate(data['pages']):
+            print(f"  Page {i+1}: {len(page['rows'])} rows")
             for row in page['rows']:
-                # row is [cartons, individual_pieces, individual_weight, style]
                 all_rows.append([row[0], bol_cube, row[1], row[2], invoice_no, row[3]])
+
+        print(f"\nTotal rows collected: {len(all_rows)}")  # Debug
+        print(f"Using totals - Pieces: {totals['pieces']}, Weight: {totals['weight']}")  # Debug
 
         # Generate CSV
         formatted_data = self._format_csv(all_rows, totals['pieces'], totals['weight'])
@@ -161,7 +205,7 @@ class DataProcessor:
             with open(new_file_path, 'w', encoding='utf-8', newline='') as file:
                 file.write(formatted_data)
             
-            print(f"Processed multi-page invoice {invoice_no}")
+            print(f"Successfully processed multi-page invoice {invoice_no}")
 
     def _format_csv(self, rows, total_pieces, total_weight):
         """Format rows into CSV with proper column mapping."""
