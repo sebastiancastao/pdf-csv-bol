@@ -261,10 +261,36 @@ def process_csv_file(file_path):
         print(f"Error processing CSV: {str(e)}")
         return False, f"Error processing file: {str(e)}"
 
-
+def cleanup_old_files():
+    """Clean up old PDFs and combined CSV file when page is loaded/refreshed."""
+    try:
+        script_dir = app.config['UPLOAD_FOLDER']
+        
+        # Delete old PDFs
+        for file in os.listdir(script_dir):
+            if file.lower().endswith('.pdf'):
+                try:
+                    os.remove(os.path.join(script_dir, file))
+                    print(f"Cleaned up old PDF: {file}")
+                except Exception as e:
+                    print(f"Error deleting PDF {file}: {str(e)}")
+        
+        # Delete old combined CSV
+        combined_csv = os.path.join(script_dir, OUTPUT_CSV_NAME)
+        if os.path.exists(combined_csv):
+            try:
+                os.remove(combined_csv)
+                print(f"Cleaned up old combined CSV: {OUTPUT_CSV_NAME}")
+            except Exception as e:
+                print(f"Error deleting combined CSV: {str(e)}")
+                
+    except Exception as e:
+        print(f"Error during cleanup: {str(e)}")
 
 @app.route('/')
 def index():
+    """Render the main page and clean up old files."""
+    cleanup_old_files()
     return render_template('index.html')
 
 # Add near your other routes
