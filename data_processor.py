@@ -6,6 +6,7 @@ import uuid
 import shutil
 from datetime import datetime
 from utils import FileUtils  # Removed OpenAI dependency
+import gc
 
 class DataProcessor:
     def __init__(self, session_id=None):
@@ -48,31 +49,31 @@ class DataProcessor:
             return False
 
         print(f"Found {len(txt_files)} TXT files to process")
-        print("Processing files in order:", txt_files)  # Debug: Show file processing order
         
-        # First pass: Collect all data by invoice number
-        for txt_file in txt_files:
-            self._collect_invoice_data(txt_file)
-        
-        # Debug: Print collected invoice data summary
-        print("\nCollected Invoice Data Summary:")
-        for invoice_no, data in self.invoice_data.items():
-            print(f"\nInvoice {invoice_no}:")
-            print(f"Number of pages: {len(data['pages'])}")
-            print(f"Has totals: {data['has_totals']}")
-            for i, page in enumerate(data['pages']):
-                print(f"  Page {i+1}:")
-                print(f"    Rows: {len(page['rows'])}")
-                print(f"    Has totals: {page['has_totals']}")
-                if page['has_totals']:
-                    print(f"    Totals: {page['totals']}")
-                print(f"    BOL Cube: {page['bol_cube']}")
-        
-        # Second pass: Process collected data by invoice
-        for invoice_no, pages_data in self.invoice_data.items():
-            self._process_invoice_data(invoice_no, pages_data)
-        
-        return True
+        try:
+            # Process files in smaller batches to conserve memory
+            batch_size = 10
+            for i in range(0, len(txt_files), batch_size):
+                batch = txt_files[i:i + batch_size]
+                print(f"Processing batch {i//batch_size + 1} of {(len(txt_files) + batch_size - 1)//batch_size}")
+                
+                # First pass: Collect data for this batch
+                for txt_file in batch:
+                    self._collect_invoice_data(txt_file)
+                
+                # Second pass: Process collected data for this batch
+                for invoice_no, pages_data in self.invoice_data.items():
+                    self._process_invoice_data(invoice_no, pages_data)
+                
+                # Clear processed data from memory
+                self.invoice_data.clear()
+                gc.collect()
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error processing files: {str(e)}")
+            return False
 
     def _collect_invoice_data(self, txt_file):
         """Collect data from a single TXT file and group by invoice number."""
@@ -100,8 +101,7 @@ class DataProcessor:
             if table_data:
                 rows, has_totals, totals = table_data
                 page_data = {
-                    'content': content,
-                    'rows': rows,
+                    'rows': rows,  # Don't store full content, just extracted data
                     'has_totals': has_totals,
                     'totals': totals,
                     'bol_cube': self._extract_bol_cube(content)
@@ -115,6 +115,9 @@ class DataProcessor:
             
         except Exception as e:
             print(f"Error collecting data from {txt_file}: {str(e)}")
+        
+        # Force garbage collection
+        gc.collect()
 
     def _extract_table_data(self, content):
         """Extract table rows and totals from content."""

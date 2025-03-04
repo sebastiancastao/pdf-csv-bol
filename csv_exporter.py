@@ -1,4 +1,5 @@
 import os
+import gc
 import glob
 import pandas as pd
 from config import OUTPUT_CSV_NAME
@@ -21,29 +22,48 @@ class CSVExporter:
 
             print(f"Found {len(csv_files)} CSV files to combine")
 
-            # Read and combine all CSV files
-            all_data = []
-            for file in csv_files:
-                try:
-                    df = pd.read_csv(file)
-                    all_data.append(df)
-                    # Delete the individual CSV file after reading
-                    os.remove(file)
-                except Exception as e:
-                    print(f"Error processing {file}: {str(e)}")
+            # Process files in chunks to conserve memory
+            chunk_size = 5
+            output_path = os.path.join(self.session_dir, OUTPUT_CSV_NAME)
+            first_file = True
+
+            for i in range(0, len(csv_files), chunk_size):
+                chunk = csv_files[i:i + chunk_size]
+                print(f"Processing chunk {i//chunk_size + 1} of {(len(csv_files) + chunk_size - 1)//chunk_size}")
+                
+                # Read and combine chunk of CSV files
+                dfs = []
+                for file in chunk:
+                    try:
+                        # Read CSV in chunks
+                        for df_chunk in pd.read_csv(file, chunksize=1000, dtype=str):
+                            dfs.append(df_chunk)
+                        # Delete the individual CSV file after reading
+                        os.remove(file)
+                    except Exception as e:
+                        print(f"Error processing {file}: {str(e)}")
+                        continue
+
+                if not dfs:
                     continue
 
-            if not all_data:
-                print("No data to combine")
-                return False
+                # Combine chunks and write to output
+                chunk_df = pd.concat(dfs, ignore_index=True)
+                
+                if first_file:
+                    # Write with header for first chunk
+                    chunk_df.to_csv(output_path, index=False, mode='w')
+                    first_file = False
+                else:
+                    # Append without header for subsequent chunks
+                    chunk_df.to_csv(output_path, index=False, mode='a', header=False)
 
-            # Combine all dataframes
-            combined_df = pd.concat(all_data, ignore_index=True)
+                # Clear memory
+                del dfs
+                del chunk_df
+                gc.collect()
 
-            # Save the combined data to the output file in the session directory
-            output_path = os.path.join(self.session_dir, OUTPUT_CSV_NAME)
-            combined_df.to_csv(output_path, index=False)
-            print(f"Successfully combined {len(csv_files)} files into {OUTPUT_CSV_NAME}")
+            print(f"Successfully combined files into {OUTPUT_CSV_NAME}")
             return True
 
         except Exception as e:
@@ -51,5 +71,5 @@ class CSVExporter:
             return False
 
 if __name__ == "__main__":
-    exporter = CSVExporter()
+    exporter = CSVExporter(".")
     exporter.combine_to_csv()
