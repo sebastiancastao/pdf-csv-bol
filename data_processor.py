@@ -167,22 +167,22 @@ class DataProcessor:
             print(f"Warning: No totals found for invoice {invoice_no}")
             return
 
-        # Get totals from the last page that has them
+        # Get totals from the last page that has non-empty totals
         totals = None
         bol_cube = ""
         print("\nLooking for totals in pages (reverse order):")  # Debug
         for i, page in enumerate(reversed(data['pages'])):
             print(f"  Checking page {len(data['pages'])-i}")  # Debug
             print(f"    Has totals: {page['has_totals']}")
-            if page['has_totals']:
+            if page['has_totals'] and page['totals']['pieces'] and page['totals']['weight']:
                 totals = page['totals']
                 bol_cube = page['bol_cube']
-                print(f"    Found totals: {totals}")
+                print(f"    Found valid totals: {totals}")
                 print(f"    BOL Cube: {bol_cube}")
                 break
 
         if not totals:
-            print(f"ERROR: No totals found in any page for invoice {invoice_no}")
+            print(f"ERROR: No valid totals found in any page for invoice {invoice_no}")
             return
 
         # Collect all rows from all pages
