@@ -15,6 +15,8 @@ from config import OUTPUT_CSV_NAME  # e.g. "combined_data.csv"
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = os.path.dirname(os.path.abspath(__file__))
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Allow cookie in iframe
+app.config['SESSION_COOKIE_SECURE'] = True  # Required for SameSite=None
 app.secret_key = 'your-secret-key-here'  # Required for session management
 
 # Allowed extensions for PDF upload
@@ -291,24 +293,26 @@ def cleanup_old_files():
 def get_or_create_session():
     """Get existing processor or create new one with session management."""
     if 'session_id' not in session:
+        # Clean up old sessions only when creating a new one
+        DataProcessor.cleanup_sessions()
         processor = DataProcessor()
         session['session_id'] = processor.session_id
+        print(f"Created new session: {processor.session_id}")
     else:
         processor = DataProcessor(session_id=session['session_id'])
+        print(f"Using existing session: {session['session_id']}")
     return processor
 
 @app.route('/', methods=['GET'])
 def index():
-    # Clean up any existing sessions
-    DataProcessor.cleanup_sessions()
-    # Create new session
+    # Get or create session without cleaning up existing ones
     processor = get_or_create_session()
     return render_template('index.html')
 
 @app.route('/process', methods=['POST'])
 def process():
-    # Create a new processor with a unique session
-    processor = DataProcessor()  # This will create a new session directory
+    # Use existing session instead of creating new one
+    processor = get_or_create_session()
     
     # Process the files
     processor.process_all_files()
@@ -420,6 +424,14 @@ def download_file():
         return send_file(csv_path, as_attachment=True)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.after_request
+def after_request(response):
+    """Add headers to allow iframe embedding and CORS."""
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    return response
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
