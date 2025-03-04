@@ -1,96 +1,54 @@
 import os
-import csv
-from io import StringIO
-from utils import FileUtils
+import glob
+import pandas as pd
 from config import OUTPUT_CSV_NAME
 
 class CSVExporter:
-    def __init__(self):
-        """Initialize the CSV exporter."""
-        self.script_dir = FileUtils.get_script_dir()
+    def __init__(self, session_dir):
+        """Initialize the CSV exporter with a session directory."""
+        self.session_dir = session_dir
 
     def combine_to_csv(self):
-        """Combines all CSV files in the directory into a single CSV file and deletes the originals."""
-        # Look for files ending with .csv, but skip the combined output file if it exists.
-        csv_files = [
-            f for f in os.listdir(self.script_dir)
-            if f.lower().endswith('.csv') and f != OUTPUT_CSV_NAME
-        ]
-        
-        if not csv_files:
-            print("No CSV files found in the directory")
-            return False
-            
-        # Initialize variables to store combined data
-        header = None
-        all_rows = []
-        
-        print(f"Found {len(csv_files)} CSV files to process")
-        
-        # Process each CSV file
-        for csv_file in csv_files:
-            file_path = os.path.join(self.script_dir, csv_file)
-            print(f"Processing {csv_file}...")
-            
-            try:
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    content = file.read().strip()
-                    
-                # Use CSV reader to properly handle the content
-                csv_reader = csv.reader(StringIO(content))
-                rows = list(csv_reader)
-                
-                if not rows:
-                    print(f"Warning: {csv_file} appears to be empty")
-                    continue
-                    
-                # For the first file with content, capture the header as is.
-                if header is None:
-                    header = rows[0]
-                    print(f"Using header: {header}")
-                
-                # Add all rows except header
-                for row in rows[1:]:
-                    if row:  # Skip empty rows
-                        all_rows.append(row)
-                        
-            except Exception as e:
-                print(f"Error processing {csv_file}: {str(e)}")
-                continue
-        
-        if not header or not all_rows:
-            print("No valid data found to combine")
-            return False
-            
-        # Create the output CSV file
-        output_file = os.path.join(self.script_dir, OUTPUT_CSV_NAME)
-        
+        """Combine all CSV files in the session directory into one."""
         try:
-            with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
-                csv_writer = csv.writer(csvfile)
-                
-                # Write the header
-                csv_writer.writerow(header)
-                
-                # Write all data rows
-                csv_writer.writerows(all_rows)
-                
-            print(f"\nSuccessfully created {output_file}")
-            print(f"Combined {len(all_rows)} data rows from {len(csv_files)} files")
-        except Exception as e:
-            print(f"Error creating CSV file: {str(e)}")
-            return False
+            # Get all CSV files in the session directory except the output file
+            csv_files = [f for f in glob.glob(os.path.join(self.session_dir, "*.csv"))
+                        if os.path.basename(f) != OUTPUT_CSV_NAME]
 
-        # Delete the individual CSV files after successful creation of the combined file.
-        for csv_file in csv_files:
-            file_path = os.path.join(self.script_dir, csv_file)
-            try:
-                os.remove(file_path)
-                print(f"Deleted {csv_file}")
-            except Exception as e:
-                print(f"Error deleting {csv_file}: {str(e)}")
-        
-        return True
+            if not csv_files:
+                print("No CSV files found to combine")
+                return False
+
+            print(f"Found {len(csv_files)} CSV files to combine")
+
+            # Read and combine all CSV files
+            all_data = []
+            for file in csv_files:
+                try:
+                    df = pd.read_csv(file)
+                    all_data.append(df)
+                    # Delete the individual CSV file after reading
+                    os.remove(file)
+                except Exception as e:
+                    print(f"Error processing {file}: {str(e)}")
+                    continue
+
+            if not all_data:
+                print("No data to combine")
+                return False
+
+            # Combine all dataframes
+            combined_df = pd.concat(all_data, ignore_index=True)
+
+            # Save the combined data to the output file in the session directory
+            output_path = os.path.join(self.session_dir, OUTPUT_CSV_NAME)
+            combined_df.to_csv(output_path, index=False)
+            print(f"Successfully combined {len(csv_files)} files into {OUTPUT_CSV_NAME}")
+            return True
+
+        except Exception as e:
+            print(f"Error combining CSV files: {str(e)}")
+            return False
 
 if __name__ == "__main__":
     exporter = CSVExporter()

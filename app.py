@@ -5,7 +5,7 @@ from pathlib import Path
 import platform
 import pandas as pd
 from io import StringIO
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, render_template, request, send_file, jsonify, session
 from werkzeug.utils import secure_filename
 from pdf_processor import PDFProcessor
 from data_processor import DataProcessor
@@ -15,6 +15,7 @@ from config import OUTPUT_CSV_NAME  # e.g. "combined_data.csv"
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = os.path.dirname(os.path.abspath(__file__))
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.secret_key = 'your-secret-key-here'  # Required for session management
 
 # Allowed extensions for PDF upload
 ALLOWED_PDF_EXTENSIONS = {'pdf'}
@@ -67,7 +68,7 @@ def process_pdf():
     except Exception as e:
         return False, str(e)
 
-def process_csv_file(file_path):
+def process_csv_file(file_path, session_dir):
     """Process and merge incoming CSV/Excel data with the PDF CSV by matching on:
        - Invoice No.
        - Style
@@ -103,8 +104,8 @@ def process_csv_file(file_path):
             "Cancel Date": "Cancel Date"
         }
         
-        # Read existing combined CSV (from PDF processing)
-        combined_csv_path = os.path.join(app.config['UPLOAD_FOLDER'], OUTPUT_CSV_NAME)
+        # Read existing combined CSV (from PDF processing) from session directory
+        combined_csv_path = os.path.join(session_dir, OUTPUT_CSV_NAME)
         if not os.path.exists(combined_csv_path):
             return False, "No PDF data processed yet. Please process PDF first."
         existing_df = pd.read_csv(combined_csv_path, dtype=str)
@@ -248,7 +249,7 @@ def process_csv_file(file_path):
             print("Warning: 'Cancel Date' or 'Ship To Name' column not found; skipping sort.")
         
         
-        # Save updated DataFrame back to the combined CSV.
+        # Save updated DataFrame back to the combined CSV in session directory
         existing_df.to_csv(combined_csv_path, index=False)
         
         return True, f"CSV data merged successfully (processed {len(incoming_df)} rows)"
@@ -287,11 +288,36 @@ def cleanup_old_files():
     except Exception as e:
         print(f"Error during cleanup: {str(e)}")
 
-@app.route('/')
+def get_or_create_session():
+    """Get existing processor or create new one with session management."""
+    if 'session_id' not in session:
+        processor = DataProcessor()
+        session['session_id'] = processor.session_id
+    else:
+        processor = DataProcessor(session_id=session['session_id'])
+    return processor
+
+@app.route('/', methods=['GET'])
 def index():
-    """Render the main page and clean up old files."""
-    cleanup_old_files()
+    # Clean up any existing sessions
+    DataProcessor.cleanup_sessions()
+    # Create new session
+    processor = get_or_create_session()
     return render_template('index.html')
+
+@app.route('/process', methods=['POST'])
+def process():
+    # Create a new processor with a unique session
+    processor = DataProcessor()  # This will create a new session directory
+    
+    # Process the files
+    processor.process_all_files()
+    
+    # Create exporter with the same session directory
+    exporter = CSVExporter(session_dir=processor.session_dir)
+    exporter.combine_to_csv()
+    
+    return jsonify({"status": "success"})
 
 # Add near your other routes
 @app.route('/health')
@@ -307,7 +333,9 @@ def health():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    # This endpoint is for PDF files only.
+    # Get existing processor with session directory
+    processor = get_or_create_session()
+    
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
         
@@ -319,15 +347,23 @@ def upload_file():
         return jsonify({'error': 'Invalid file type (PDF required)'}), 400
         
     try:
-        # Save the uploaded PDF
+        # Save the uploaded PDF directly to session directory
         filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file_path = os.path.join(processor.session_dir, filename)
         file.save(file_path)
         
         # Process the PDF through our pipeline
-        success, message = process_pdf()
-        if not success:
-            return jsonify({'error': message}), 500
+        pdf_processor = PDFProcessor(session_dir=processor.session_dir)
+        if not pdf_processor.process_first_pdf():
+            return jsonify({'error': 'Failed to process PDF'}), 500
+            
+        if not processor.process_all_files():
+            return jsonify({'error': 'Failed to process text files'}), 500
+            
+        # Create exporter with the same session directory
+        exporter = CSVExporter(session_dir=processor.session_dir)
+        if not exporter.combine_to_csv():
+            return jsonify({'error': 'Failed to create CSV file'}), 500
             
         return jsonify({'message': 'File processed successfully'}), 200
         
@@ -337,6 +373,9 @@ def upload_file():
 @app.route('/upload-csv', methods=['POST'])
 def upload_csv():
     try:
+        # Get existing processor with session directory
+        processor = get_or_create_session()
+        
         if 'file' not in request.files:
             return jsonify({'error': 'No file uploaded'}), 400
             
@@ -347,13 +386,13 @@ def upload_csv():
         if not allowed_file(file.filename, ALLOWED_CSV_EXTENSIONS):
             return jsonify({'error': 'Invalid file type. Please upload a CSV or Excel file'}), 400
             
-        # Save uploaded file with unique name to prevent conflicts
+        # Save uploaded file to session directory
         filename = secure_filename(f"temp_{file.filename}")
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file_path = os.path.join(processor.session_dir, filename)
         
         try:
             file.save(file_path)
-            success, message = process_csv_file(file_path)
+            success, message = process_csv_file(file_path, processor.session_dir)
             
             if not success:
                 return jsonify({'error': message}), 400
@@ -371,10 +410,13 @@ def upload_csv():
     except Exception as e:
         print(f"Upload error: {str(e)}")  # For debugging
         return jsonify({'error': 'An unexpected error occurred'}), 500
+
 @app.route('/download')
 def download_file():
     try:
-        csv_path = os.path.join(app.config['UPLOAD_FOLDER'], OUTPUT_CSV_NAME)
+        # Get existing processor with session directory
+        processor = get_or_create_session()
+        csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
         return send_file(csv_path, as_attachment=True)
     except Exception as e:
         return jsonify({'error': str(e)}), 500

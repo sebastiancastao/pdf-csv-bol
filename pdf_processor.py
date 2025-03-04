@@ -5,19 +5,19 @@ from utils import PopplerUtils, FileUtils
 from config import POPPLER_PATH
 
 class PDFProcessor:
-    def __init__(self):
-        """Initialize the PDF processor and check Poppler installation."""
+    def __init__(self, session_dir):
+        """Initialize the PDF processor with a session directory."""
         PopplerUtils.check_poppler_installation()
-        self.script_dir = FileUtils.get_script_dir()
+        self.session_dir = session_dir
 
     def process_first_pdf(self):
         """Process the first PDF found in the directory."""
-        pdf_files = FileUtils.get_pdf_files(self.script_dir)
+        pdf_files = [f for f in os.listdir(self.session_dir) if f.lower().endswith('.pdf')]
         if not pdf_files:
-            print("No PDF files found in the directory")
+            print("No PDF files found in the session directory")
             return False
 
-        pdf_path = os.path.join(self.script_dir, pdf_files[0])
+        pdf_path = os.path.join(self.session_dir, pdf_files[0])
         print(f"Processing {pdf_path}...")
         
         # Extract both text and images
@@ -31,7 +31,7 @@ class PDFProcessor:
             with pdfplumber.open(pdf_path) as pdf:
                 for i, page in enumerate(pdf.pages):
                     text = page.extract_text()
-                    text_path = os.path.join(self.script_dir, f"{i+1}.txt")
+                    text_path = os.path.join(self.session_dir, f"{i+1}.txt")
                     
                     with open(text_path, 'w', encoding='utf-8') as text_file:
                         text_file.write(text)
@@ -49,7 +49,7 @@ class PDFProcessor:
             )
             
             for i, image in enumerate(images):
-                image_path = os.path.join(self.script_dir, f"page_{i+1}.jpg")
+                image_path = os.path.join(self.session_dir, f"page_{i+1}.jpg")
                 image.save(image_path, "JPEG")
                 print(f"Saved image to {image_path}")
                 
@@ -57,5 +57,5 @@ class PDFProcessor:
             print(f"Error converting PDF to images: {str(e)}")
 
 if __name__ == "__main__":
-    processor = PDFProcessor()
+    processor = PDFProcessor(".")  # Use current directory for CLI usage
     processor.process_first_pdf() 
