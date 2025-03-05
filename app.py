@@ -151,50 +151,49 @@ def process_csv_file(file_path, session_dir):
         existing_df.drop(columns=["match_key"], inplace=True)
         incoming_df.drop(columns=["match_key"], inplace=True)
         
-        # Compute "Pallet" (Column T) as 1 pallet for every 80 of "BOL Cube" (Column Q), rounded up.
-        def compute_pallet(bol_cube):
-            try:
-                value = float(str(bol_cube).replace(",", "").strip())
-                return math.ceil(value / 80)
-            except Exception:
-                return ""
-        
+        # Compute values for all rows first
         if "BOL Cube" in existing_df.columns:
-            existing_df["Pallet"] = existing_df["BOL Cube"].apply(compute_pallet)
+            pallet_values = existing_df["BOL Cube"].apply(lambda x: compute_pallet(x))
+            existing_df["Pallet"] = ""  # Initialize empty column
         else:
             print("Warning: 'BOL Cube' column not found in existing CSV data.")
+            pallet_values = pd.Series([""] * len(existing_df))
         
-        # Compute "Burlington Cube" (Column S) as Pallet x 93 for rows where "Ship To Name" (Column L) contains "Burlington".
-        def compute_burlington(ship_to_name, pallet):
-            try:
-                if isinstance(ship_to_name, str) and "burlington" in ship_to_name.lower():
-                    if pd.isna(pallet) or pallet == "":
-                        return ""
-                    return int(pallet) * 93
-            except Exception:
-                return ""
-            return ""
-        
-        if "Ship To Name" in existing_df.columns and "Pallet" in existing_df.columns:
-            existing_df["Burlington Cube"] = existing_df.apply(lambda row: compute_burlington(row["Ship To Name"], row["Pallet"]), axis=1)
+        if "Ship To Name" in existing_df.columns:
+            burlington_values = existing_df.apply(
+                lambda row: compute_burlington(row["Ship To Name"], pallet_values.iloc[row.name]), 
+                axis=1
+            )
+            final_cube_values = existing_df.apply(
+                lambda row: compute_final_cube(row["Ship To Name"], pallet_values.iloc[row.name]), 
+                axis=1
+            )
+            
+            existing_df["Burlington Cube"] = ""  # Initialize empty column
+            existing_df["Final Cube"] = ""      # Initialize empty column
         else:
-            print("Warning: 'Ship To Name' or 'Pallet' column not found in existing CSV data.")
+            print("Warning: 'Ship To Name' column not found in existing CSV data.")
+            burlington_values = pd.Series([""] * len(existing_df))
+            final_cube_values = pd.Series([""] * len(existing_df))
         
-        # Compute "Final Cube" (Column R) as Pallet x 130 for rows that do NOT contain "Burlington" in "Ship To Name".
-        def compute_final_cube(ship_to_name, pallet):
-            try:
-                if isinstance(ship_to_name, str) and "burlington" not in ship_to_name.lower():
-                    if pd.isna(pallet) or pallet == "":
-                        return ""
-                    return int(pallet) * 130
-            except Exception:
-                return ""
-            return ""
+        # Group by Invoice No. and only set values for first row of each group
+        current_invoice = None
+        is_first_row = True
         
-        if "Ship To Name" in existing_df.columns and "Pallet" in existing_df.columns:
-            existing_df["Final Cube"] = existing_df.apply(lambda row: compute_final_cube(row["Ship To Name"], row["Pallet"]), axis=1)
-        else:
-            print("Warning: 'Ship To Name' or 'Pallet' column not found in existing CSV data.")
+        for idx in range(len(existing_df)):
+            invoice_no = existing_df.iloc[idx]["Invoice No."]
+            
+            # Check if this is the first row of a new invoice group
+            if invoice_no != current_invoice:
+                current_invoice = invoice_no
+                is_first_row = True
+            
+            # Only set the values for the first row of each invoice group
+            if is_first_row:
+                existing_df.iloc[idx, existing_df.columns.get_loc("Pallet")] = pallet_values.iloc[idx]
+                existing_df.iloc[idx, existing_df.columns.get_loc("Burlington Cube")] = burlington_values.iloc[idx]
+                existing_df.iloc[idx, existing_df.columns.get_loc("Final Cube")] = final_cube_values.iloc[idx]
+                is_first_row = False
             
         def parse_cancel_date(date_str):
             """
@@ -230,10 +229,6 @@ def process_csv_file(file_path, session_dir):
             return pd.NaT
 
         # --- Sorting the output ---
-        # We want to sort so that the earliest cancel dates are at the top,
-        # but rows with the same "Ship To Name" are bunched together.
-        # We'll convert "Cancel Date" to datetime (ignoring errors),
-        # then group by "Ship To Name" and sort each group by "Cancel Date".
         if "Cancel Date" in existing_df.columns and "Ship To Name" in existing_df.columns:
             # Convert the raw strings in "Cancel Date" to datetime using the custom function:
             existing_df["Cancel Date_dt"] = existing_df["Cancel Date"].apply(parse_cancel_date)
@@ -250,7 +245,6 @@ def process_csv_file(file_path, session_dir):
         else:
             print("Warning: 'Cancel Date' or 'Ship To Name' column not found; skipping sort.")
         
-        
         # Save updated DataFrame back to the combined CSV in session directory
         existing_df.to_csv(combined_csv_path, index=False)
         
@@ -263,6 +257,36 @@ def process_csv_file(file_path, session_dir):
     except Exception as e:
         print(f"Error processing CSV: {str(e)}")
         return False, f"Error processing file: {str(e)}"
+
+def compute_pallet(bol_cube):
+    """Compute pallet value from BOL Cube."""
+    try:
+        value = float(str(bol_cube).replace(",", "").strip())
+        return math.ceil(value / 80)
+    except Exception:
+        return ""
+
+def compute_burlington(ship_to_name, pallet):
+    """Compute Burlington Cube value."""
+    try:
+        if isinstance(ship_to_name, str) and "burlington" in ship_to_name.lower():
+            if pd.isna(pallet) or pallet == "":
+                return ""
+            return int(pallet) * 93
+    except Exception:
+        return ""
+    return ""
+
+def compute_final_cube(ship_to_name, pallet):
+    """Compute Final Cube value."""
+    try:
+        if isinstance(ship_to_name, str) and "burlington" not in ship_to_name.lower():
+            if pd.isna(pallet) or pallet == "":
+                return ""
+            return int(pallet) * 130
+    except Exception:
+        return ""
+    return ""
 
 def cleanup_old_files():
     """Clean up old PDFs and combined CSV file when page is loaded/refreshed."""
@@ -293,19 +317,42 @@ def cleanup_old_files():
 def get_or_create_session():
     """Get existing processor or create new one with session management."""
     if 'session_id' not in session:
-        # Clean up old sessions only when creating a new one
-        DataProcessor.cleanup_sessions()
+        # Only clean up old sessions when creating a new one AND no session exists
+        base_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions')
+        if os.path.exists(base_dir):
+            # Check if there are any existing sessions with combined_data.csv
+            existing_sessions = []
+            for session_dir in os.listdir(base_dir):
+                full_path = os.path.join(base_dir, session_dir)
+                if os.path.isdir(full_path):
+                    csv_path = os.path.join(full_path, OUTPUT_CSV_NAME)
+                    if os.path.exists(csv_path):
+                        existing_sessions.append(session_dir)
+            
+            if existing_sessions:
+                # Use the most recent session that has a combined_data.csv
+                most_recent = sorted(existing_sessions)[-1]
+                session['session_id'] = most_recent
+                processor = DataProcessor(session_id=most_recent)
+                print(f"Reusing existing session with data: {most_recent}")
+                return processor
+            else:
+                # No valid sessions found, clean up and create new
+                DataProcessor.cleanup_sessions()
+        
+        # Create new session if none exists or no valid sessions found
         processor = DataProcessor()
         session['session_id'] = processor.session_id
         print(f"Created new session: {processor.session_id}")
     else:
         processor = DataProcessor(session_id=session['session_id'])
         print(f"Using existing session: {session['session_id']}")
+        print(f"Using existing session: {session['session_id']}")
     return processor
 
 @app.route('/', methods=['GET'])
 def index():
-    # Get or create session without cleaning up existing ones
+    # Get or create session without cleaning up existing valid sessions
     processor = get_or_create_session()
     return render_template('index.html')
 
