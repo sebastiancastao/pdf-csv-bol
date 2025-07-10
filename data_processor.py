@@ -51,29 +51,56 @@ class DataProcessor:
         print(f"Found {len(txt_files)} TXT files to process")
         
         try:
-            # Process files in smaller batches to conserve memory
-            batch_size = 10
-            for i in range(0, len(txt_files), batch_size):
-                batch = txt_files[i:i + batch_size]
-                print(f"Processing batch {i//batch_size + 1} of {(len(txt_files) + batch_size - 1)//batch_size}")
-                
-                # First pass: Collect data for this batch
-                for txt_file in batch:
-                    self._collect_invoice_data(txt_file)
-                
-                # Second pass: Process collected data for this batch
-                for invoice_no, pages_data in self.invoice_data.items():
-                    self._process_invoice_data(invoice_no, pages_data)
-                
-                # Clear processed data from memory
-                self.invoice_data.clear()
-                gc.collect()
+            # Process all files without deleting them first
+            print("=== PHASE 1: COLLECTING DATA FROM ALL FILES ===")
+            for txt_file in txt_files:
+                self._collect_invoice_data(txt_file)
+            
+            # Validate collected data
+            print("=== DATA COLLECTION SUMMARY ===")
+            total_collected_rows = 0
+            for invoice_no, data in self.invoice_data.items():
+                invoice_rows = sum(len(page['rows']) for page in data['pages'])
+                total_collected_rows += invoice_rows
+                print(f"Invoice {invoice_no}: {len(data['pages'])} pages, {invoice_rows} rows")
+            print(f"TOTAL COLLECTED ROWS: {total_collected_rows}")
+            
+            # Process all collected data
+            print("\n=== PHASE 2: PROCESSING COLLECTED DATA ===")
+            total_processed_rows = 0
+            for invoice_no, pages_data in self.invoice_data.items():
+                rows_processed = self._process_invoice_data(invoice_no, pages_data)
+                total_processed_rows += rows_processed
+            
+            print(f"\n=== PROCESSING SUMMARY ===")
+            print(f"Total rows collected: {total_collected_rows}")
+            print(f"Total rows processed: {total_processed_rows}")
+            
+            if total_collected_rows != total_processed_rows:
+                print(f"⚠️  WARNING: Row count mismatch! {total_collected_rows - total_processed_rows} rows may have been lost!")
+            else:
+                print("✅ SUCCESS: All collected rows were processed successfully!")
+            
+            # Clean up TXT files only after successful processing
+            print("\n=== PHASE 3: CLEANING UP TXT FILES ===")
+            self._cleanup_txt_files()
             
             return True
             
         except Exception as e:
             print(f"Error processing files: {str(e)}")
             return False
+
+    def _cleanup_txt_files(self):
+        """Clean up TXT files after successful processing."""
+        txt_files = [f for f in FileUtils.get_txt_files(self.session_dir) if f != 'requirements.txt']
+        for txt_file in txt_files:
+            file_path = os.path.join(self.session_dir, txt_file)
+            try:
+                os.remove(file_path)
+                print(f"Cleaned up {txt_file}")
+            except Exception as e:
+                print(f"Warning: Could not remove {txt_file}: {str(e)}")
 
     def _collect_invoice_data(self, txt_file):
         """Collect data from a single TXT file and group by invoice number."""
@@ -109,9 +136,10 @@ class DataProcessor:
                 self.invoice_data[invoice_no]['pages'].append(page_data)
                 if has_totals:
                     self.invoice_data[invoice_no]['has_totals'] = True
-
-            # Delete the processed txt file
-            os.remove(file_path)
+                
+                print(f"  Found {len(rows)} rows in {txt_file}, totals: {has_totals}")
+            
+            # DON'T DELETE THE TXT FILE HERE - wait until all processing is complete
             
         except Exception as e:
             print(f"Error collecting data from {txt_file}: {str(e)}")
@@ -131,34 +159,111 @@ class DataProcessor:
         for i, line in enumerate(lines):
             if "CARTONS" in line.upper() and "STYLE" in line.upper() and "PIECES" in line.upper():
                 table_start = i
+                print(f"  Found table header at line {i}: {line.strip()}")
                 break
 
         if table_start is None:
+            print("  WARNING: Table header not found")
             return None
 
         # Process rows and look for totals
-        for line in lines[table_start+1:]:
+        print(f"  Processing table data from line {table_start + 1}...")
+        for line_num, line in enumerate(lines[table_start+1:], table_start + 2):
+            line_stripped = line.strip()
+            
+            # Check for totals first
             if "TOTAL CARTONS" in line.upper():
                 has_totals = True
                 tokens = line.split()
                 if len(tokens) >= 11:
                     totals['pieces'] = tokens[3].replace(',', '')
                     totals['weight'] = tokens[-1].replace(',', '')
+                print(f"  Found totals at line {line_num}: pieces={totals['pieces']}, weight={totals['weight']}")
                 break
+            
+            # Stop at shipping instructions
             if "SHIPPING INSTRUCTIONS:" in line.upper():
+                print(f"  Reached shipping instructions at line {line_num}")
                 break
-            if not line.strip():
+            
+            # Skip empty lines
+            if not line_stripped:
                 continue
-            if re.match(r'^\d+', line.strip()):
-                tokens = line.split()
+            
+            # Improved row detection - more flexible patterns
+            # Look for lines that contain numeric data that could be table rows
+            if self._is_valid_table_row(line_stripped):
+                tokens = line_stripped.split()
                 if len(tokens) >= 3:
-                    cartons = tokens[0].replace(',', '')
-                    style = tokens[1]
-                    individual_pieces = tokens[2].replace(',', '')
-                    individual_weight = tokens[-1].replace(',', '')
-                    rows.append([cartons, individual_pieces, individual_weight, style])
+                    try:
+                        # Try to extract the data - be more flexible with parsing
+                        cartons = tokens[0].replace(',', '')
+                        style = tokens[1]
+                        individual_pieces = tokens[2].replace(',', '')
+                        
+                        # The weight should be the last numeric token
+                        individual_weight = ""
+                        for token in reversed(tokens):
+                            if re.match(r'^\d+\.?\d*$', token.replace(',', '')):
+                                individual_weight = token.replace(',', '')
+                                break
+                        
+                        if individual_weight:  # Only add if we found a weight
+                            rows.append([cartons, individual_pieces, individual_weight, style])
+                            print(f"  Line {line_num}: Added row - cartons={cartons}, style={style}, pieces={individual_pieces}, weight={individual_weight}")
+                        else:
+                            print(f"  Line {line_num}: Skipped (no weight found) - {line_stripped}")
+                    except (IndexError, ValueError) as e:
+                        print(f"  Line {line_num}: Skipped (parsing error) - {line_stripped} - {str(e)}")
+                else:
+                    print(f"  Line {line_num}: Skipped (insufficient tokens) - {line_stripped}")
+            else:
+                print(f"  Line {line_num}: Skipped (not a table row) - {line_stripped}")
 
+        print(f"  Extracted {len(rows)} rows total")
         return rows, has_totals, totals
+
+    def _is_valid_table_row(self, line):
+        """Check if a line is a valid table row using more flexible criteria."""
+        # Remove extra spaces
+        line = ' '.join(line.split())
+        
+        # Skip obviously non-data lines
+        if not line:
+            return False
+        
+        # Skip lines that are clearly headers or instructions
+        skip_patterns = [
+            r'^CARTONS.*STYLE.*PIECES',
+            r'^SHIPPING INSTRUCTIONS',
+            r'^TOTAL CARTONS',
+            r'^Page \d+',
+            r'^BILL OF LADING',
+            r'^[A-Z\s]+:',  # Lines ending with colon (like labels)
+        ]
+        
+        for pattern in skip_patterns:
+            if re.match(pattern, line, re.IGNORECASE):
+                return False
+        
+        # Look for patterns that indicate this is a data row
+        # 1. Starts with a number (original logic)
+        if re.match(r'^\d+', line):
+            return True
+        
+        # 2. Contains multiple numeric values (could be a table row with formatting issues)
+        numbers = re.findall(r'\d+', line)
+        if len(numbers) >= 3:  # At least 3 numbers suggests a data row
+            return True
+        
+        # 3. Contains typical style patterns (letters/numbers combination)
+        if re.search(r'\b[A-Z]+\d+\b', line) or re.search(r'\b\d+[A-Z]+\b', line):
+            tokens = line.split()
+            # Check if we have enough tokens and at least one looks like a number
+            if len(tokens) >= 3 and any(re.match(r'^\d+', token) for token in tokens):
+                return True
+        
+        return False
 
     def _extract_bol_cube(self, content):
         """Extract BOL Cube from content."""
@@ -177,16 +282,18 @@ class DataProcessor:
 
     def _process_invoice_data(self, invoice_no, data):
         """Process collected data for an invoice and create CSV."""
-        if not data['has_totals']:
-            print(f"Warning: No totals found for invoice {invoice_no}")
-            return
-
+        print(f"\n=== Processing Invoice {invoice_no} ===")
+        
+        # Count total rows across all pages
+        total_rows = sum(len(page['rows']) for page in data['pages'])
+        print(f"Total rows found across all pages: {total_rows}")
+        
         # Get totals from the last page that has non-empty totals
         totals = None
         bol_cube = ""
-        print("\nLooking for totals in pages (reverse order):")  # Debug
+        print("Looking for totals in pages (reverse order):")
         for i, page in enumerate(reversed(data['pages'])):
-            print(f"  Checking page {len(data['pages'])-i}")  # Debug
+            print(f"  Checking page {len(data['pages'])-i}")
             print(f"    Has totals: {page['has_totals']}")
             if page['has_totals'] and page['totals']['pieces'] and page['totals']['weight']:
                 totals = page['totals']
@@ -195,16 +302,27 @@ class DataProcessor:
                 print(f"    BOL Cube: {bol_cube}")
                 break
 
+        # If no totals found, calculate from individual rows
         if not totals:
-            print(f"ERROR: No valid totals found in any page for invoice {invoice_no}")
-            return
+            print("No pre-calculated totals found. Calculating from individual rows...")
+            totals = self._calculate_totals_from_rows(data['pages'])
+            # Use BOL cube from first page that has one
+            for page in data['pages']:
+                if page['bol_cube']:
+                    bol_cube = page['bol_cube']
+                    break
+            print(f"Calculated totals: {totals}")
+            print(f"Using BOL Cube: {bol_cube}")
 
         # Collect all rows from all pages
         all_rows = []
-        for page in data['pages']:
+        for page_num, page in enumerate(data['pages'], 1):
+            print(f"Processing page {page_num}: {len(page['rows'])} rows")
             for row in page['rows']:
                 # row is [cartons, individual_pieces, individual_weight, style]
                 all_rows.append([row[0], bol_cube, row[1], row[2], invoice_no, row[3]])
+
+        print(f"Total rows to process: {len(all_rows)}")
 
         # Generate CSV
         formatted_data = self._format_csv(all_rows, totals['pieces'], totals['weight'])
@@ -215,7 +333,33 @@ class DataProcessor:
             with open(new_file_path, 'w', encoding='utf-8', newline='') as file:
                 file.write(formatted_data)
             
-            print(f"Processed multi-page invoice {invoice_no}")
+            print(f"Successfully processed invoice {invoice_no} with {len(all_rows)} rows")
+            return len(all_rows)  # Return the number of rows processed for the summary
+        else:
+            print(f"ERROR: Failed to generate CSV for invoice {invoice_no}")
+            return 0  # Return 0 for failed processing
+
+    def _calculate_totals_from_rows(self, pages):
+        """Calculate totals from individual rows when no totals are found."""
+        total_pieces = 0
+        total_weight = 0.0
+        
+        for page in pages:
+            for row in page['rows']:
+                try:
+                    # row is [cartons, individual_pieces, individual_weight, style]
+                    pieces = int(row[1].replace(',', '')) if row[1] else 0
+                    weight = float(row[2].replace(',', '')) if row[2] else 0.0
+                    total_pieces += pieces
+                    total_weight += weight
+                except (ValueError, IndexError) as e:
+                    print(f"    Warning: Could not parse row {row}: {str(e)}")
+                    continue
+        
+        return {
+            'pieces': str(total_pieces),
+            'weight': str(int(total_weight))  # Convert to int for consistency
+        }
 
     def _format_csv(self, rows, total_pieces, total_weight):
         """Format rows into CSV with proper column mapping."""

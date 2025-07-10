@@ -6,7 +6,7 @@ OPENAI_API_KEY = os.environ.get("OPEN_AI_API_KEY", "")
 
 # Poppler Configuration
 if platform.system() == "Windows":
-    POPPLER_PATH = "C:\\Program Files\\poppler\\bin"
+    POPPLER_PATH = "C:\\Users\\sebas\\OneDrive\\Escritorio\\PDF-BOL-Extractor-AWorks\\poppler\\poppler-24.02.0\\Library\\bin"
 else:
     # On Linux, poppler-utils is installed via apt-get and is usually in PATH
     POPPLER_PATH = None  # or '/usr/bin' if your code requires an explicit path
