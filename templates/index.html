@@ -413,6 +413,133 @@
           },
         },
       }).mount("#app");
+
+      // Global functions that can be called from external JavaScript
+      window.downloadBOLFile = function(filename) {
+        try {
+          console.log(`✅ BOL download clicked: ${filename}`);
+          
+          // Use the appropriate download endpoint
+          const downloadUrl = filename ? `/download-bol/${filename}` : '/download-bol';
+          
+          // Create a temporary link element and click it
+          const link = document.createElement('a');
+          link.href = downloadUrl;
+          link.download = filename || 'BOL_processed.csv';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          
+          console.log(`🧹 Cleaned up download link for: ${filename}`);
+          return true;
+        } catch (error) {
+          console.error(`❌ Error downloading BOL file: ${error.message}`);
+          return false;
+        }
+      };
+
+      window.getBOLStatus = function() {
+        return axios.get('/status')
+          .then(response => {
+            console.log('📊 BOL Status:', response.data);
+            return response.data;
+          })
+          .catch(error => {
+            console.error('❌ Error getting BOL status:', error);
+            return null;
+          });
+      };
+
+      window.getBOLFiles = function() {
+        return axios.get('/files')
+          .then(response => {
+            console.log('📁 Available BOL files:', response.data);
+            return response.data;
+          })
+          .catch(error => {
+            console.error('❌ Error getting BOL files:', error);
+            return null;
+          });
+      };
+
+      window.processBOLWorkflow = function() {
+        return axios.post('/process-workflow')
+          .then(response => {
+            console.log('✅ BOL workflow completed:', response.data);
+            return response.data;
+          })
+          .catch(error => {
+            console.error('❌ Error processing BOL workflow:', error);
+            return null;
+          });
+      };
+
+      window.clearBOLSession = function() {
+        return axios.post('/clear-session')
+          .then(response => {
+            console.log('🧹 BOL session cleared:', response.data);
+            return response.data;
+          })
+          .catch(error => {
+            console.error('❌ Error clearing BOL session:', error);
+            return null;
+          });
+      };
+
+      window.pingBOLService = function() {
+        return axios.get('/ping')
+          .then(response => {
+            console.log('🏓 BOL service ping:', response.data);
+            return response.data;
+          })
+          .catch(error => {
+            console.error('❌ Error pinging BOL service:', error);
+            return null;
+          });
+      };
+
+      // Function to handle file uploads from external JavaScript
+      window.uploadBOLFile = function(file) {
+        if (!file) {
+          console.error('❌ No file provided for upload');
+          return Promise.reject(new Error('No file provided'));
+        }
+
+        console.log(`📤 Uploading BOL file: ${file.name}`);
+        
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const isPDF = file.type === 'application/pdf';
+        const endpoint = isPDF ? '/upload' : '/upload-csv';
+
+        return axios.post(endpoint, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
+        })
+        .then(response => {
+          console.log(`✅ BOL file uploaded successfully: ${file.name}`);
+          return response.data;
+        })
+        .catch(error => {
+          console.error(`❌ Error uploading BOL file: ${error.message}`);
+          throw error;
+        });
+      };
+
+      // Export functions for use in other scripts
+      window.BOLProcessor = {
+        downloadFile: window.downloadBOLFile,
+        getStatus: window.getBOLStatus,
+        getFiles: window.getBOLFiles,
+        processWorkflow: window.processBOLWorkflow,
+        clearSession: window.clearBOLSession,
+        ping: window.pingBOLService,
+        uploadFile: window.uploadBOLFile
+      };
+
+      console.log('🚀 BOL Processor JavaScript functions loaded');
     </script>
 
     <style>

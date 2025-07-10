@@ -1,11 +1,12 @@
 import os
 import csv
 import math
+import shutil
 from pathlib import Path
 import platform
 import pandas as pd
 from io import StringIO
-from flask import Flask, render_template, request, send_file, jsonify, session
+from flask import Flask, render_template, request, send_file, jsonify, session, make_response
 from werkzeug.utils import secure_filename
 from pdf_processor import PDFProcessor
 from data_processor import DataProcessor
@@ -16,8 +17,10 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = os.path.dirname(os.path.abspath(__file__))
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Allow cookie in iframe
-app.config['SESSION_COOKIE_SECURE'] = True  # Required for SameSite=None
-app.secret_key = 'your-secret-key-here'  # Required for session management
+app.config['SESSION_COOKIE_SECURE'] = False  # Set to True in production with HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True  # Security best practice
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # Session expires after 1 hour
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-here')  # Use env var in production
 
 # Allowed extensions for PDF upload
 ALLOWED_PDF_EXTENSIONS = {'pdf'}
@@ -472,12 +475,321 @@ def download_file():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/download-bol')
+def download_bol_file():
+    """Download the processed BOL CSV file."""
+    try:
+        # Get existing processor with session directory
+        processor = get_or_create_session()
+        csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
+        
+        if not os.path.exists(csv_path):
+            return jsonify({'error': 'No processed file available'}), 404
+            
+        return send_file(csv_path, as_attachment=True, download_name='BOL_processed.csv')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/download-bol/<filename>')
+def download_bol_file_by_name(filename):
+    """Download a specific BOL file by name."""
+    try:
+        # Get existing processor with session directory
+        processor = get_or_create_session()
+        
+        # Secure the filename to prevent directory traversal
+        secure_name = secure_filename(filename)
+        file_path = os.path.join(processor.session_dir, secure_name)
+        
+        # Check if it's the main CSV file
+        if secure_name == OUTPUT_CSV_NAME:
+            file_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
+        
+        if not os.path.exists(file_path):
+            return jsonify({'error': f'File {secure_name} not found'}), 404
+            
+        return send_file(file_path, as_attachment=True, download_name=secure_name)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/status')
+def get_status():
+    """Get the current processing status."""
+    try:
+        # Get existing processor with session directory
+        processor = get_or_create_session()
+        csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
+        
+        status = {
+            'session_id': processor.session_id,
+            'has_processed_data': os.path.exists(csv_path),
+            'session_dir': processor.session_dir
+        }
+        
+        # Check for available files
+        if os.path.exists(processor.session_dir):
+            files = []
+            for file in os.listdir(processor.session_dir):
+                if file.endswith(('.csv', '.pdf')):
+                    file_path = os.path.join(processor.session_dir, file)
+                    files.append({
+                        'name': file,
+                        'size': os.path.getsize(file_path),
+                        'type': 'csv' if file.endswith('.csv') else 'pdf'
+                    })
+            status['available_files'] = files
+        
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/files')
+def list_files():
+    """List all available files in the current session."""
+    try:
+        # Get existing processor with session directory
+        processor = get_or_create_session()
+        
+        files = []
+        if os.path.exists(processor.session_dir):
+            for file in os.listdir(processor.session_dir):
+                if not file.startswith('.'):  # Skip hidden files
+                    file_path = os.path.join(processor.session_dir, file)
+                    files.append({
+                        'name': file,
+                        'size': os.path.getsize(file_path),
+                        'type': 'csv' if file.endswith('.csv') else 'pdf' if file.endswith('.pdf') else 'other',
+                        'download_url': f'/download-bol/{file}'
+                    })
+        
+        return jsonify({'files': files})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/process-workflow', methods=['POST'])
+def process_workflow():
+    """Handle the complete processing workflow."""
+    try:
+        # Get existing processor with session directory
+        processor = get_or_create_session()
+        
+        # Check if there are any PDF files to process
+        pdf_files = []
+        if os.path.exists(processor.session_dir):
+            for file in os.listdir(processor.session_dir):
+                if file.lower().endswith('.pdf'):
+                    pdf_files.append(file)
+        
+        if not pdf_files:
+            return jsonify({'error': 'No PDF files found to process'}), 400
+        
+        # Process all PDFs
+        pdf_processor = PDFProcessor(session_dir=processor.session_dir)
+        if not pdf_processor.process_first_pdf():
+            return jsonify({'error': 'Failed to process PDF files'}), 500
+        
+        # Process text files
+        if not processor.process_all_files():
+            return jsonify({'error': 'Failed to process extracted text'}), 500
+        
+        # Create CSV
+        exporter = CSVExporter(session_dir=processor.session_dir)
+        if not exporter.combine_to_csv():
+            return jsonify({'error': 'Failed to create CSV output'}), 500
+        
+        # Get result info
+        csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
+        result = {
+            'status': 'success',
+            'message': 'Processing completed successfully',
+            'output_file': OUTPUT_CSV_NAME,
+            'download_url': '/download-bol',
+            'session_id': processor.session_id
+        }
+        
+        if os.path.exists(csv_path):
+            result['file_size'] = os.path.getsize(csv_path)
+            # Count rows (excluding header)
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                row_count = sum(1 for row in reader) - 1  # Subtract header
+                result['row_count'] = row_count
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'error': f'Processing failed: {str(e)}'}), 500
+
+@app.route('/clear-session', methods=['POST'])
+def clear_session():
+    """Clear the current session and start fresh."""
+    try:
+        if 'session_id' in session:
+            old_session_id = session['session_id']
+            session.pop('session_id', None)
+            
+            # Clean up old session directory
+            old_session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', old_session_id)
+            if os.path.exists(old_session_dir):
+                import shutil
+                shutil.rmtree(old_session_dir)
+        
+        # Create new session
+        processor = get_or_create_session()
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Session cleared successfully',
+            'new_session_id': processor.session_id
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/ping')
+def ping():
+    """Simple ping endpoint to check if the service is alive."""
+    return jsonify({'status': 'alive', 'message': 'BOL Extractor service is running'})
+
+@app.route('/api/health')
+def api_health():
+    """API health check endpoint."""
+    try:
+        # Get existing processor to test session creation
+        processor = get_or_create_session()
+        
+        return jsonify({
+            'status': 'healthy',
+            'service': 'BOL Extractor API',
+            'session_id': processor.session_id,
+            'endpoints': {
+                'upload': '/upload',
+                'upload_csv': '/upload-csv',
+                'download': '/download',
+                'download_bol': '/download-bol',
+                'status': '/status',
+                'files': '/files',
+                'process_workflow': '/process-workflow',
+                'clear_session': '/clear-session',
+                'ping': '/ping',
+                'api_docs': '/api/docs'
+            }
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e)
+        }), 500
+
+@app.route('/api/docs')
+def api_docs():
+    """API documentation endpoint."""
+    return jsonify({
+        'service': 'BOL Extractor API',
+        'version': '1.0.0',
+        'description': 'API for processing BOL (Bill of Lading) PDF files and CSV data',
+        'endpoints': {
+            'GET /': {
+                'description': 'Main application page',
+                'response': 'HTML page'
+            },
+            'POST /upload': {
+                'description': 'Upload and process a PDF file',
+                'parameters': {
+                    'file': 'PDF file (multipart/form-data)'
+                },
+                'response': 'Processing result'
+            },
+            'POST /upload-csv': {
+                'description': 'Upload and merge CSV/Excel data',
+                'parameters': {
+                    'file': 'CSV/Excel file (multipart/form-data)'
+                },
+                'response': 'Merge result'
+            },
+            'GET /download': {
+                'description': 'Download processed CSV file',
+                'response': 'CSV file download'
+            },
+            'GET /download-bol': {
+                'description': 'Download processed BOL CSV file',
+                'response': 'CSV file download'
+            },
+            'GET /download-bol/<filename>': {
+                'description': 'Download specific file by name',
+                'parameters': {
+                    'filename': 'Name of file to download'
+                },
+                'response': 'File download'
+            },
+            'GET /status': {
+                'description': 'Get current processing status',
+                'response': 'Status information'
+            },
+            'GET /files': {
+                'description': 'List available files in current session',
+                'response': 'List of available files'
+            },
+            'POST /process-workflow': {
+                'description': 'Process complete workflow',
+                'response': 'Workflow processing result'
+            },
+            'POST /clear-session': {
+                'description': 'Clear current session and start fresh',
+                'response': 'Session clearing result'
+            },
+            'GET /ping': {
+                'description': 'Simple ping to check service availability',
+                'response': 'Service status'
+            },
+            'GET /health': {
+                'description': 'Health check endpoint',
+                'response': 'Health status'
+            },
+            'GET /api/health': {
+                'description': 'API health check endpoint',
+                'response': 'API health status'
+            }
+        },
+        'cors': {
+            'enabled': True,
+            'allow_origin': '*',
+            'allow_methods': ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
+            'allow_headers': ['Content-Type', 'Authorization', 'X-Requested-With']
+        }
+    })
+
+@app.before_request
+def handle_preflight():
+    """Handle CORS preflight requests."""
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization,X-Requested-With")
+        response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS")
+        response.headers.add('Access-Control-Max-Age', '86400')
+        return response
+
+@app.route('/<path:path>', methods=['OPTIONS'])
+def handle_options(path):
+    """Handle OPTIONS requests for all paths."""
+    response = make_response()
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization,X-Requested-With")
+    response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS")
+    response.headers.add('Access-Control-Max-Age', '86400')
+    return response
+
 @app.after_request
 def after_request(response):
     """Add headers to allow iframe embedding and CORS."""
     response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
+    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE')
+    response.headers.add('Access-Control-Allow-Credentials', 'false')  # Changed to false for * origin
+    response.headers.add('Access-Control-Expose-Headers', 'Content-Disposition')
+    response.headers.add('X-Frame-Options', 'ALLOWALL')
+    response.headers.add('X-Content-Type-Options', 'nosniff')
     return response
 
 if __name__ == '__main__':
