@@ -199,47 +199,27 @@
                   viewBox="0 0 20 20"
                 >
                   <path
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z"
+                    fill-rule="evenodd"
+                    d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                    clip-rule="evenodd"
                   />
                 </svg>
-                <span class="text-blue-500 animate-pulse-text font-medium"
-                  >Please keep this window open</span
-                >
+                <span class="animate-pulse-text">
+                  Do not close this window while processing
+                </span>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- Error State 
-            <div v-if="error" 
-                class="fixed bottom-4 right-4 p-4 rounded-lg shadow-lg z-50 animate-fade-in"
-                :class="[error.includes('success') ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600']">
-                <div class="flex items-center">
-                    <svg v-if="!error.includes('success')" class="h-5 w-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
-                    </svg>
-                    <svg v-else class="h-5 w-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-                    </svg>
-                    <p>{{ error }}</p>
-                    <button @click="error = null" 
-                            :class="[error.includes('success') ? 'text-green-700 hover:text-green-800' : 'text-red-700 hover:text-red-800']"
-                            class="ml-4">
-                        <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
-                        </svg>
-                    </button>
-                </div>
-            </div> -->
-
-        <!-- Final Download Section -->
+        <!-- Error Messages -->
         <div
-          v-if="isComplete"
-          class="bg-white rounded-lg shadow-md p-6 text-center animate-fade-in"
+          v-if="error"
+          class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 animate-fade-in"
         >
-          <div class="mb-4">
+          <div class="flex items-center">
             <svg
-              class="mx-auto h-12 w-12 text-green-500"
+              class="h-5 w-5 text-red-400 mr-2"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -248,22 +228,50 @@
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 stroke-width="2"
-                d="M5 13l4 4L19 7"
-              ></path>
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"
+              />
+            </svg>
+            <div>
+              <h3 class="text-sm font-medium text-red-800">Error</h3>
+              <p class="text-sm text-red-700">{{ error }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Success/Complete State -->
+        <div
+          v-if="isComplete"
+          class="bg-green-50 border border-green-200 rounded-lg p-6 mb-6 text-center animate-fade-in"
+        >
+          <div class="flex justify-center mb-4">
+            <svg
+              class="h-16 w-16 text-green-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
             </svg>
           </div>
-          <h3 class="text-lg font-medium text-gray-900 mb-2">
-            All Processing Complete!
+          <h3 class="text-lg font-semibold text-green-800 mb-2">
+            Processing Complete!
           </h3>
-          <p class="text-gray-600 mb-4">
-            Your files have been successfully processed
+          <p class="text-green-700 mb-4">
+            Your files have been processed successfully. You can now download
+            the combined results.
           </p>
+
           <button
             @click="downloadCSV"
-            class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+            class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors duration-200"
           >
             <svg
-              class="w-5 h-5 mr-2"
+              class="mr-2 h-5 w-5"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -498,34 +506,143 @@
           });
       };
 
-      // Function to handle file uploads from external JavaScript
-      window.uploadBOLFile = function(file) {
+      // Enhanced function to handle file uploads from external JavaScript
+      window.uploadBOLFile = function(file, options = {}) {
         if (!file) {
           console.error('❌ No file provided for upload');
           return Promise.reject(new Error('No file provided'));
         }
 
-        console.log(`📤 Uploading BOL file: ${file.name}`);
+        console.log(`📤 Uploading BOL file: ${file.name || 'unnamed file'}`);
         
-        const formData = new FormData();
-        formData.append('file', file);
+        // Handle different file input types
+        if (file instanceof File || file instanceof Blob) {
+          // Standard file upload
+          const formData = new FormData();
+          formData.append('file', file);
 
-        const isPDF = file.type === 'application/pdf';
-        const endpoint = isPDF ? '/upload' : '/upload-csv';
+          const isPDF = file.type === 'application/pdf';
+          const endpoint = isPDF ? '/upload' : '/upload-csv';
 
-        return axios.post(endpoint, formData, {
+          return axios.post(endpoint, formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data'
+            }
+          })
+          .then(response => {
+            console.log(`✅ BOL file uploaded successfully: ${file.name}`);
+            return response.data;
+          })
+          .catch(error => {
+            console.error(`❌ Error uploading BOL file: ${error.message}`);
+            throw error;
+          });
+        } else if (typeof file === 'string' || file.attachmentData) {
+          // Base64 or attachment data upload
+          const attachmentData = file.attachmentData || file;
+          const filename = file.filename || file.name || 'attachment.pdf';
+          
+          const payload = {
+            attachmentData: attachmentData,
+            filename: filename
+          };
+
+          return axios.post('/upload-attachment', payload, {
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          })
+          .then(response => {
+            console.log(`✅ BOL attachment uploaded successfully: ${filename}`);
+            return response.data;
+          })
+          .catch(error => {
+            console.error(`❌ Error uploading BOL attachment: ${error.message}`);
+            throw error;
+          });
+        } else {
+          console.error('❌ Invalid file format provided');
+          return Promise.reject(new Error('Invalid file format'));
+        }
+      };
+
+      // Function to handle base64 file uploads
+      window.uploadBOLBase64 = function(base64Data, filename = 'attachment.pdf') {
+        if (!base64Data) {
+          console.error('❌ No base64 data provided');
+          return Promise.reject(new Error('No base64 data provided'));
+        }
+
+        console.log(`📤 Uploading BOL base64 file: ${filename}`);
+        
+        const payload = {
+          file_data: base64Data,
+          filename: filename
+        };
+
+        return axios.post('/upload-base64', payload, {
           headers: {
-            'Content-Type': 'multipart/form-data'
+            'Content-Type': 'application/json'
           }
         })
         .then(response => {
-          console.log(`✅ BOL file uploaded successfully: ${file.name}`);
+          console.log(`✅ BOL base64 file uploaded successfully: ${filename}`);
           return response.data;
         })
         .catch(error => {
-          console.error(`❌ Error uploading BOL file: ${error.message}`);
+          console.error(`❌ Error uploading BOL base64 file: ${error.message}`);
           throw error;
         });
+      };
+
+      // Function to handle attachment data uploads
+      window.uploadBOLAttachment = function(attachmentData, filename = 'attachment.pdf') {
+        if (!attachmentData) {
+          console.error('❌ No attachment data provided');
+          return Promise.reject(new Error('No attachment data provided'));
+        }
+
+        console.log(`📤 Uploading BOL attachment: ${filename}`);
+        
+        const payload = {
+          attachmentData: attachmentData,
+          filename: filename
+        };
+
+        return axios.post('/upload-attachment', payload, {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        })
+        .then(response => {
+          console.log(`✅ BOL attachment uploaded successfully: ${filename}`);
+          return response.data;
+        })
+        .catch(error => {
+          console.error(`❌ Error uploading BOL attachment: ${error.message}`);
+          throw error;
+        });
+      };
+
+      // Function to process attachments with dedicated processor (for external app compatibility)
+      window.processBOLWithDedicatedProcessor = function(attachmentData, filename = 'attachment.pdf') {
+        if (!attachmentData) {
+          console.error('❌ No attachment data provided to processBOLWithDedicatedProcessor');
+          return Promise.reject(new Error('No attachment data provided'));
+        }
+
+        console.log(`🔄 Processing BOL with dedicated processor: ${filename}`);
+        
+        // Handle the attachment data directly
+        return window.uploadBOLAttachment(attachmentData, filename)
+          .then(result => {
+            console.log(`✅ BOL processed successfully with dedicated processor: ${filename}`);
+            return result;
+          })
+          .catch(error => {
+            console.error(`❌ Error processing BOL with dedicated processor: ${error.message}`);
+            throw error;
+          });
       };
 
       // Export functions for use in other scripts
@@ -536,7 +653,10 @@
         processWorkflow: window.processBOLWorkflow,
         clearSession: window.clearBOLSession,
         ping: window.pingBOLService,
-        uploadFile: window.uploadBOLFile
+        uploadFile: window.uploadBOLFile,
+        uploadBase64: window.uploadBOLBase64,
+        uploadAttachment: window.uploadBOLAttachment,
+        processDedicated: window.processBOLWithDedicatedProcessor
       };
 
       console.log('🚀 BOL Processor JavaScript functions loaded');

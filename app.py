@@ -319,6 +319,15 @@ def cleanup_old_files():
 
 def get_or_create_session():
     """Get existing processor or create new one with session management."""
+    # Check for session ID in query parameters first (for external apps)
+    external_session_id = request.args.get('_sid') or request.args.get('session_id')
+    
+    # Use external session ID if provided, otherwise use Flask session
+    if external_session_id:
+        processor = DataProcessor(session_id=external_session_id)
+        print(f"Using external session ID: {external_session_id}")
+        return processor
+    
     if 'session_id' not in session:
         # Only clean up old sessions when creating a new one AND no session exists
         base_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions')
@@ -349,7 +358,6 @@ def get_or_create_session():
         print(f"Created new session: {processor.session_id}")
     else:
         processor = DataProcessor(session_id=session['session_id'])
-        print(f"Using existing session: {session['session_id']}")
         print(f"Using existing session: {session['session_id']}")
     return processor
 
@@ -421,6 +429,153 @@ def upload_file():
             
         return jsonify({'message': 'File processed successfully'}), 200
         
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/upload-base64', methods=['POST'])
+def upload_base64():
+    """Handle file upload with base64 encoded data (for email attachments)."""
+    try:
+        # Get existing processor with session directory
+        processor = get_or_create_session()
+        
+        # Parse JSON request
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+            
+        # Get file data from request
+        file_data = data.get('file_data') or data.get('attachmentData')
+        filename = data.get('filename') or data.get('name', 'attachment.pdf')
+        
+        if not file_data:
+            return jsonify({'error': 'No file data provided'}), 400
+        
+        # Handle base64 encoded data
+        import base64
+        try:
+            # Remove data URL prefix if present
+            if ',' in file_data:
+                file_data = file_data.split(',')[1]
+            
+            # Decode base64 data
+            decoded_data = base64.b64decode(file_data)
+            
+            # Secure filename
+            filename = secure_filename(filename)
+            
+            # Ensure PDF extension
+            if not filename.lower().endswith('.pdf'):
+                filename += '.pdf'
+            
+            # Save file to session directory
+            file_path = os.path.join(processor.session_dir, filename)
+            with open(file_path, 'wb') as f:
+                f.write(decoded_data)
+            
+            # Process the PDF through our pipeline
+            pdf_processor = PDFProcessor(session_dir=processor.session_dir)
+            if not pdf_processor.process_first_pdf():
+                return jsonify({'error': 'Failed to process PDF'}), 500
+                
+            if not processor.process_all_files():
+                return jsonify({'error': 'Failed to process text files'}), 500
+                
+            # Create exporter with the same session directory
+            exporter = CSVExporter(session_dir=processor.session_dir)
+            if not exporter.combine_to_csv():
+                return jsonify({'error': 'Failed to create CSV file'}), 500
+                
+            return jsonify({
+                'message': 'File processed successfully',
+                'filename': filename,
+                'file_size': len(decoded_data)
+            }), 200
+            
+        except Exception as decode_error:
+            return jsonify({'error': f'Failed to decode file data: {str(decode_error)}'}), 400
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/upload-attachment', methods=['POST'])
+def upload_attachment():
+    """Handle attachment upload with flexible data formats."""
+    try:
+        # Get existing processor with session directory
+        processor = get_or_create_session()
+        
+        # Try to get data from different sources
+        data = None
+        
+        # Check if it's JSON data
+        if request.is_json:
+            data = request.get_json()
+        elif request.form:
+            # Form data
+            data = request.form.to_dict()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Get file information
+        attachment_data = data.get('attachmentData') or data.get('file_data') or data.get('data')
+        filename = data.get('filename') or data.get('name', 'attachment.pdf')
+        
+        if not attachment_data:
+            return jsonify({'error': 'No attachment data provided'}), 400
+        
+        # Handle different data formats
+        import base64
+        try:
+            # If it's already bytes, use as is
+            if isinstance(attachment_data, bytes):
+                file_bytes = attachment_data
+            else:
+                # Try to decode as base64
+                if isinstance(attachment_data, str):
+                    # Remove data URL prefix if present
+                    if ',' in attachment_data:
+                        attachment_data = attachment_data.split(',')[1]
+                    file_bytes = base64.b64decode(attachment_data)
+                else:
+                    return jsonify({'error': 'Invalid attachment data format'}), 400
+            
+            # Secure filename
+            filename = secure_filename(filename)
+            
+            # Ensure PDF extension
+            if not filename.lower().endswith('.pdf'):
+                filename += '.pdf'
+            
+            # Save file to session directory
+            file_path = os.path.join(processor.session_dir, filename)
+            with open(file_path, 'wb') as f:
+                f.write(file_bytes)
+            
+            # Process the PDF through our pipeline
+            pdf_processor = PDFProcessor(session_dir=processor.session_dir)
+            if not pdf_processor.process_first_pdf():
+                return jsonify({'error': 'Failed to process PDF'}), 500
+                
+            if not processor.process_all_files():
+                return jsonify({'error': 'Failed to process text files'}), 500
+                
+            # Create exporter with the same session directory
+            exporter = CSVExporter(session_dir=processor.session_dir)
+            if not exporter.combine_to_csv():
+                return jsonify({'error': 'Failed to create CSV file'}), 500
+                
+            return jsonify({
+                'message': 'Attachment processed successfully',
+                'filename': filename,
+                'file_size': len(file_bytes),
+                'status': 'success'
+            }), 200
+            
+        except Exception as decode_error:
+            return jsonify({'error': f'Failed to process attachment data: {str(decode_error)}'}), 400
+            
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -665,6 +820,8 @@ def api_health():
             'endpoints': {
                 'upload': '/upload',
                 'upload_csv': '/upload-csv',
+                'upload_base64': '/upload-base64',
+                'upload_attachment': '/upload-attachment',
                 'download': '/download',
                 'download_bol': '/download-bol',
                 'status': '/status',
@@ -706,6 +863,22 @@ def api_docs():
                     'file': 'CSV/Excel file (multipart/form-data)'
                 },
                 'response': 'Merge result'
+            },
+            'POST /upload-base64': {
+                'description': 'Upload and process base64 encoded PDF file',
+                'parameters': {
+                    'file_data': 'Base64 encoded file data (JSON)',
+                    'filename': 'Optional filename (JSON)'
+                },
+                'response': 'Processing result'
+            },
+            'POST /upload-attachment': {
+                'description': 'Upload and process attachment data (flexible format)',
+                'parameters': {
+                    'attachmentData': 'Attachment data (base64 or bytes)',
+                    'filename': 'Optional filename'
+                },
+                'response': 'Processing result'
             },
             'GET /download': {
                 'description': 'Download processed CSV file',
@@ -764,32 +937,40 @@ def handle_preflight():
     """Handle CORS preflight requests."""
     if request.method == "OPTIONS":
         response = make_response()
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization,X-Requested-With")
-        response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS")
-        response.headers.add('Access-Control-Max-Age', '86400')
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers['Access-Control-Allow-Headers'] = "Content-Type,Authorization,X-Requested-With"
+        response.headers['Access-Control-Allow-Methods'] = "GET,PUT,POST,DELETE,OPTIONS"
+        response.headers['Access-Control-Max-Age'] = '86400'
         return response
 
 @app.route('/<path:path>', methods=['OPTIONS'])
 def handle_options(path):
     """Handle OPTIONS requests for all paths."""
     response = make_response()
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization,X-Requested-With")
-    response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS")
-    response.headers.add('Access-Control-Max-Age', '86400')
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers['Access-Control-Allow-Headers'] = "Content-Type,Authorization,X-Requested-With"
+    response.headers['Access-Control-Allow-Methods'] = "GET,PUT,POST,DELETE,OPTIONS"
+    response.headers['Access-Control-Max-Age'] = '86400'
     return response
 
 @app.after_request
 def after_request(response):
     """Add headers to allow iframe embedding and CORS."""
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
-    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE')
-    response.headers.add('Access-Control-Allow-Credentials', 'false')  # Changed to false for * origin
-    response.headers.add('Access-Control-Expose-Headers', 'Content-Disposition')
-    response.headers.add('X-Frame-Options', 'ALLOWALL')
-    response.headers.add('X-Content-Type-Options', 'nosniff')
+    # Remove any existing CORS headers to prevent duplicates
+    response.headers.pop('Access-Control-Allow-Origin', None)
+    response.headers.pop('Access-Control-Allow-Headers', None)
+    response.headers.pop('Access-Control-Allow-Methods', None)
+    response.headers.pop('Access-Control-Allow-Credentials', None)
+    response.headers.pop('Access-Control-Expose-Headers', None)
+    
+    # Add fresh CORS headers
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS, PUT, DELETE'
+    response.headers['Access-Control-Allow-Credentials'] = 'false'
+    response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
+    response.headers['X-Frame-Options'] = 'ALLOWALL'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
 
 if __name__ == '__main__':
