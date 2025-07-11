@@ -333,51 +333,34 @@ def get_or_create_session():
         print(f"🆕 Force creating new session due to _action=new_session: {processor.session_id}")
         return processor
     
-    # Use external session ID if provided, otherwise use Flask session
+    # **CRITICAL FIX**: For external sessions, always use the provided ID without reuse logic
     if external_session_id:
-        # Check if this session exists and has data
+        # Always create/use the exact session ID provided by external apps
         session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', external_session_id)
+        
+        # Create processor with the specified session ID (creates directory if needed)
+        processor = DataProcessor(session_id=external_session_id)
+        
         if os.path.exists(session_dir):
-            processor = DataProcessor(session_id=external_session_id)
-            print(f"♻️ Reusing existing external session: {external_session_id}")
+            print(f"🔄 Using external session: {external_session_id} (directory exists)")
         else:
-            # External session doesn't exist, create new one with the requested ID
-            processor = DataProcessor(session_id=external_session_id)
-            print(f"🆕 Creating new external session with requested ID: {external_session_id}")
+            print(f"🆕 Creating new external session: {external_session_id}")
+        
         return processor
     
+    # For internal Flask sessions (web UI), use simple logic
     if 'session_id' not in session:
-        # Only clean up old sessions when creating a new one AND no session exists
-        base_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions')
-        if os.path.exists(base_dir):
-            # Check if there are any existing sessions with combined_data.csv
-            existing_sessions = []
-            for session_dir in os.listdir(base_dir):
-                full_path = os.path.join(base_dir, session_dir)
-                if os.path.isdir(full_path):
-                    csv_path = os.path.join(full_path, OUTPUT_CSV_NAME)
-                    if os.path.exists(csv_path):
-                        existing_sessions.append(session_dir)
-            
-            if existing_sessions:
-                # Use the most recent session that has a combined_data.csv
-                most_recent = sorted(existing_sessions)[-1]
-                session['session_id'] = most_recent
-                processor = DataProcessor(session_id=most_recent)
-                print(f"Reusing existing session with data: {most_recent}")
-                return processor
-            else:
-                # No valid sessions found, clean up and create new
-                DataProcessor.cleanup_sessions()
-        
-        # Create new session if none exists or no valid sessions found
+        # Create new internal session
         processor = DataProcessor()
         session['session_id'] = processor.session_id
-        print(f"Created new session: {processor.session_id}")
+        print(f"🆕 Created new internal session: {processor.session_id}")
+        return processor
     else:
-        processor = DataProcessor(session_id=session['session_id'])
-        print(f"Using existing session: {session['session_id']}")
-    return processor
+        # Use existing internal session
+        internal_session_id = session['session_id']
+        processor = DataProcessor(session_id=internal_session_id)
+        print(f"♻️ Reusing internal session: {internal_session_id}")
+        return processor
 
 @app.route('/', methods=['GET'])
 def index():
@@ -1029,44 +1012,59 @@ def process_workflow():
 
 @app.route('/clear-session', methods=['POST'])
 def clear_session():
-    """Clear the current session and start fresh."""
+    """Clear current session and start fresh."""
     try:
-        old_session_id = None
-        
-        # Get session ID from multiple sources
-        if 'session_id' in session:
-            old_session_id = session['session_id']
-            session.pop('session_id', None)
-        
-        # Also check query parameters for external sessions
+        # Check for external session ID
         external_session_id = request.args.get('_sid') or request.args.get('session_id')
+        
         if external_session_id:
-            old_session_id = external_session_id
-        
-        # Clean up old session directory
-        if old_session_id:
-            old_session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', old_session_id)
-            if os.path.exists(old_session_dir):
-                import shutil
-                shutil.rmtree(old_session_dir)
-                print(f"🧹 Cleaned up session directory: {old_session_id}")
-        
-        # Create new session
-        processor = get_or_create_session()
-        
-        return jsonify({
-            'status': 'success',
-            'message': 'Session cleared and ready for new workflow',
-            'old_session_id': old_session_id,
-            'new_session_id': processor.session_id,
-            'cleanup_completed': True
-        })
-        
+            # Clear specific external session
+            session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', external_session_id)
+            
+            if os.path.exists(session_dir):
+                try:
+                    shutil.rmtree(session_dir)
+                    print(f"🗑️ Cleared external session directory: {external_session_id}")
+                except Exception as e:
+                    print(f"⚠️ Error clearing external session {external_session_id}: {str(e)}")
+                    
+            return jsonify({
+                'message': f'External session {external_session_id} cleared',
+                'session_id': external_session_id,
+                'status': 'cleared'
+            })
+        else:
+            # Clear Flask session (internal)
+            if 'session_id' in session:
+                old_session_id = session['session_id']
+                session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', old_session_id)
+                
+                if os.path.exists(session_dir):
+                    try:
+                        shutil.rmtree(session_dir)
+                        print(f"🗑️ Cleared internal session directory: {old_session_id}")
+                    except Exception as e:
+                        print(f"⚠️ Error clearing internal session {old_session_id}: {str(e)}")
+                
+                # Clear Flask session
+                session.clear()
+                print(f"🗑️ Cleared Flask session: {old_session_id}")
+                
+                return jsonify({
+                    'message': f'Internal session {old_session_id} cleared',
+                    'session_id': old_session_id,
+                    'status': 'cleared'
+                })
+            else:
+                return jsonify({
+                    'message': 'No active session to clear',
+                    'status': 'no_session'
+                })
+                
     except Exception as e:
         return jsonify({
-            'status': 'error',
-            'error': str(e),
-            'message': 'Failed to clear session properly'
+            'error': f'Error clearing session: {str(e)}',
+            'status': 'error'
         }), 500
 
 @app.route('/auto-reset', methods=['POST'])
@@ -1111,76 +1109,176 @@ def auto_reset():
 
 @app.route('/new-session', methods=['GET', 'POST'])
 def new_session():
-    """Create a new session explicitly (for external apps)."""
+    """Create a new session explicitly."""
     try:
-        # Always create a new session
-        processor = DataProcessor()
+        # Check if a specific session ID is requested
+        requested_session_id = request.args.get('_sid') or request.args.get('session_id')
         
-        return jsonify({
-            'status': 'success',
-            'session_id': processor.session_id,
-            'message': 'New session created successfully',
-            'ready_for_upload': True,
-            'endpoints': {
-                'upload': '/upload',
-                'upload_base64': '/upload-base64',
-                'upload_attachment': '/upload-attachment',
-                'status': f'/status?_sid={processor.session_id}',
-                'files': f'/files?_sid={processor.session_id}'
-            }
-        })
-        
+        if requested_session_id:
+            # Create new session with the specific ID requested
+            processor = DataProcessor(session_id=requested_session_id)
+            
+            # Ensure the session directory is clean
+            session_dir = processor.session_dir
+            if os.path.exists(session_dir):
+                try:
+                    shutil.rmtree(session_dir)
+                    print(f"🗑️ Cleaned existing session directory: {requested_session_id}")
+                except Exception as e:
+                    print(f"⚠️ Warning: Could not clean existing directory: {str(e)}")
+            
+            # Recreate clean session directory
+            os.makedirs(session_dir, exist_ok=True)
+            print(f"🆕 Created fresh external session: {requested_session_id}")
+            
+            return jsonify({
+                'status': 'created',
+                'session_id': requested_session_id,
+                'session_dir': session_dir,
+                'message': f'New external session {requested_session_id} created',
+                'type': 'external'
+            })
+        else:
+            # Create new internal Flask session
+            # Clear any existing Flask session first
+            session.clear()
+            
+            # Create new processor (generates new session ID)
+            processor = DataProcessor()
+            session['session_id'] = processor.session_id
+            
+            print(f"🆕 Created fresh internal session: {processor.session_id}")
+            
+            return jsonify({
+                'status': 'created',
+                'session_id': processor.session_id,
+                'session_dir': processor.session_dir,
+                'message': f'New internal session {processor.session_id} created',
+                'type': 'internal'
+            })
+            
     except Exception as e:
         return jsonify({
-            'status': 'error',
-            'error': str(e),
-            'message': 'Failed to create new session'
+            'error': f'Error creating new session: {str(e)}',
+            'status': 'error'
         }), 500
 
 @app.route('/debug-sessions')
 def debug_sessions():
-    """Debug endpoint to show session information."""
+    """Debug endpoint to show all session information."""
     try:
-        sessions_info = []
-        base_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions')
+        # Get current session info
+        current_session_info = {}
         
-        if os.path.exists(base_dir):
-            for session_dir in os.listdir(base_dir):
-                full_path = os.path.join(base_dir, session_dir)
-                if os.path.isdir(full_path):
-                    # Get session info
-                    files = []
-                    for file in os.listdir(full_path):
-                        file_path = os.path.join(full_path, file)
-                        files.append({
-                            'name': file,
-                            'size': os.path.getsize(file_path),
-                            'modified': os.path.getmtime(file_path)
-                        })
+        # Check for external session ID
+        external_session_id = request.args.get('_sid') or request.args.get('session_id')
+        if external_session_id:
+            current_session_info['external_session_id'] = external_session_id
+            current_session_info['type'] = 'external'
+        
+        # Check Flask session
+        if 'session_id' in session:
+            current_session_info['flask_session_id'] = session['session_id']
+            if not external_session_id:
+                current_session_info['type'] = 'internal'
+        
+        # List all session directories
+        sessions_base_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions')
+        session_directories = []
+        
+        if os.path.exists(sessions_base_dir):
+            for item in os.listdir(sessions_base_dir):
+                session_path = os.path.join(sessions_base_dir, item)
+                if os.path.isdir(session_path):
+                    # Get session directory info
+                    session_info = {
+                        'session_id': item,
+                        'path': session_path,
+                        'files': [],
+                        'has_pdf': False,
+                        'has_csv': False,
+                        'has_combined_csv': False,
+                        'size_mb': 0
+                    }
                     
-                    sessions_info.append({
-                        'session_id': session_dir,
-                        'created': os.path.getctime(full_path),
-                        'modified': os.path.getmtime(full_path),
-                        'files': files,
-                        'has_combined_csv': any(f['name'] == OUTPUT_CSV_NAME for f in files)
-                    })
+                    try:
+                        # List files in session directory
+                        for file in os.listdir(session_path):
+                            file_path = os.path.join(session_path, file)
+                            if os.path.isfile(file_path):
+                                file_size = os.path.getsize(file_path)
+                                session_info['files'].append({
+                                    'name': file,
+                                    'size_bytes': file_size,
+                                    'size_mb': round(file_size / 1024 / 1024, 2)
+                                })
+                                session_info['size_mb'] += file_size / 1024 / 1024
+                                
+                                # Check file types
+                                if file.lower().endswith('.pdf'):
+                                    session_info['has_pdf'] = True
+                                elif file.lower().endswith(('.csv', '.xlsx', '.xls')):
+                                    if file == OUTPUT_CSV_NAME:
+                                        session_info['has_combined_csv'] = True
+                                    else:
+                                        session_info['has_csv'] = True
+                        
+                        session_info['size_mb'] = round(session_info['size_mb'], 2)
+                        session_directories.append(session_info)
+                        
+                    except Exception as e:
+                        session_info['error'] = str(e)
+                        session_directories.append(session_info)
         
-        current_session = get_or_create_session()
+        # Session workflow status
+        workflow_status = {
+            'session_identified': bool(external_session_id or 'session_id' in session),
+            'session_directory_exists': False,
+            'ready_for_pdf': False,
+            'ready_for_csv': False,
+            'ready_for_download': False
+        }
+        
+        # Check current session status
+        if external_session_id:
+            active_session_dir = os.path.join(sessions_base_dir, external_session_id)
+            workflow_status['session_directory_exists'] = os.path.exists(active_session_dir)
+            workflow_status['ready_for_pdf'] = workflow_status['session_directory_exists']
+            
+            if workflow_status['session_directory_exists']:
+                combined_csv = os.path.join(active_session_dir, OUTPUT_CSV_NAME)
+                workflow_status['ready_for_csv'] = True
+                workflow_status['ready_for_download'] = os.path.exists(combined_csv)
+        elif 'session_id' in session:
+            flask_session_id = session['session_id']
+            active_session_dir = os.path.join(sessions_base_dir, flask_session_id)
+            workflow_status['session_directory_exists'] = os.path.exists(active_session_dir)
+            workflow_status['ready_for_pdf'] = workflow_status['session_directory_exists']
+            
+            if workflow_status['session_directory_exists']:
+                combined_csv = os.path.join(active_session_dir, OUTPUT_CSV_NAME)
+                workflow_status['ready_for_csv'] = True
+                workflow_status['ready_for_download'] = os.path.exists(combined_csv)
         
         return jsonify({
-            'current_session_id': current_session.session_id,
-            'total_sessions': len(sessions_info),
-            'sessions': sessions_info,
+            'current_session': current_session_info,
+            'workflow_status': workflow_status,
+            'all_sessions': session_directories,
+            'total_sessions': len(session_directories),
             'query_params': dict(request.args),
-            'request_headers': dict(request.headers),
-            'timestamp': time.time()
+            'request_info': {
+                'method': request.method,
+                'url': request.url,
+                'user_agent': request.headers.get('User-Agent', 'Unknown'),
+                'referer': request.headers.get('Referer', 'Direct'),
+            },
+            'debug_timestamp': time.time()
         })
         
     except Exception as e:
         return jsonify({
             'error': str(e),
-            'message': 'Debug endpoint failed'
+            'message': 'Debug session failed'
         }), 500
 
 @app.route('/debug-request', methods=['GET', 'POST', 'PUT', 'DELETE'])
