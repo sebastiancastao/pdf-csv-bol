@@ -290,9 +290,11 @@
     </div>
 
     <script>
+      // Vue.js 3 Application
       const { createApp } = Vue;
-
-      createApp({
+      
+      // Create and mount the Vue app
+      window.vueApp = createApp({
         data() {
           return {
             currentStep: 1,
@@ -378,7 +380,7 @@
               this.isCsvComplete = true;
               this.isComplete = true;
 
-              // Optional: Show success message
+              // Show success message
               this.showMessage("Data mapped successfully!");
               setTimeout(() => {
                 this.error = null;
@@ -399,7 +401,93 @@
             }, 5000);
           },
           downloadCSV() {
-            window.location.href = "/download";
+            this.initiateDownloadAndCleanup();
+          },
+
+          async initiateDownloadAndCleanup() {
+            try {
+              // Start download
+              window.location.href = "/download";
+              
+              // Show cleanup message
+              this.showMessage("Download started. Preparing for next workflow...");
+              
+              // Wait a moment for download to start, then trigger auto-reset
+              setTimeout(async () => {
+                await this.performAutoReset();
+              }, 2000);
+              
+            } catch (error) {
+              console.error('❌ Error during download and cleanup:', error);
+              this.showError('Download completed, but cleanup failed. You may need to refresh manually.');
+            }
+          },
+
+          async performAutoReset() {
+            try {
+              console.log('🔄 Starting automatic reset after download...');
+              
+              // Call the new auto-reset endpoint
+              const response = await axios.post('/auto-reset');
+              
+              if (response.data.status === 'success') {
+                console.log('✅ Auto-reset completed:', response.data);
+                
+                // Reset frontend state
+                this.resetAppState();
+                
+                // Show success message
+                this.showMessage("🎉 Process complete! Ready for next workflow.", 'success');
+                
+                // Clear success message after delay
+                setTimeout(() => {
+                  this.error = null;
+                }, 3000);
+              } else {
+                throw new Error(response.data.message || 'Auto-reset failed');
+              }
+              
+            } catch (error) {
+              console.error('❌ Auto-reset failed:', error);
+              this.showError('Auto-reset failed. Please refresh the page manually.');
+            }
+          },
+
+          resetAppState() {
+            console.log('🔄 Resetting application state...');
+            
+            // Reset all Vue data to initial state
+            this.currentStep = 1;
+            this.isProcessing = false;
+            this.isPdfComplete = false;
+            this.isCsvComplete = false;
+            this.isComplete = false;
+            this.error = null;
+            this.processingMessage = "";
+            this.progress = 0;
+            
+            // Clear file inputs
+            if (this.$refs.fileInput) {
+              this.$refs.fileInput.value = '';
+            }
+            if (this.$refs.csvInput) {
+              this.$refs.csvInput.value = '';
+            }
+            
+            // Stop any running progress intervals
+            this.stopProgress();
+            
+            console.log('✅ Application state reset complete');
+          },
+
+          showMessage(message, type = 'info') {
+            if (type === 'success') {
+              this.error = `✅ ${message}`;
+            } else if (type === 'info') {
+              this.error = `ℹ️ ${message}`;
+            } else {
+              this.error = message;
+            }
           },
 
           startProgress() {
@@ -478,7 +566,7 @@
           })
           .catch(error => {
             console.error('❌ Error processing BOL workflow:', error);
-            return null;
+            throw error;
           });
       };
 
@@ -490,86 +578,59 @@
           })
           .catch(error => {
             console.error('❌ Error clearing BOL session:', error);
-            return null;
+            throw error;
           });
       };
 
       window.pingBOLService = function() {
         return axios.get('/ping')
           .then(response => {
-            console.log('🏓 BOL service ping:', response.data);
+            console.log('🏓 BOL service pinged:', response.data);
             return response.data;
           })
           .catch(error => {
             console.error('❌ Error pinging BOL service:', error);
-            return null;
+            throw error;
           });
       };
 
-      // Enhanced function to handle file uploads from external JavaScript
+      // Function to upload files with different formats
       window.uploadBOLFile = function(file, options = {}) {
-        if (!file) {
-          console.error('❌ No file provided for upload');
-          return Promise.reject(new Error('No file provided'));
-        }
-
-        console.log(`📤 Uploading BOL file: ${file.name || 'unnamed file'}`);
+        console.log('📤 Uploading BOL file:', file);
         
         // Handle different file input types
-        if (file instanceof File || file instanceof Blob) {
-          // Standard file upload
+        if (file instanceof File) {
+          // Regular file upload
           const formData = new FormData();
           formData.append('file', file);
-
-          const isPDF = file.type === 'application/pdf';
-          const endpoint = isPDF ? '/upload' : '/upload-csv';
-
-          return axios.post(endpoint, formData, {
+          
+          return axios.post('/upload', formData, {
             headers: {
               'Content-Type': 'multipart/form-data'
             }
           })
           .then(response => {
-            console.log(`✅ BOL file uploaded successfully: ${file.name}`);
+            console.log('✅ BOL file uploaded successfully');
             return response.data;
           })
           .catch(error => {
-            console.error(`❌ Error uploading BOL file: ${error.message}`);
+            console.error('❌ Error uploading BOL file:', error);
             throw error;
           });
-        } else if (typeof file === 'string' || file.attachmentData) {
-          // Base64 or attachment data upload
-          const attachmentData = file.attachmentData || file;
-          const filename = file.filename || file.name || 'attachment.pdf';
-          
-          const payload = {
-            attachmentData: attachmentData,
-            filename: filename
-          };
-
-          return axios.post('/upload-attachment', payload, {
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          })
-          .then(response => {
-            console.log(`✅ BOL attachment uploaded successfully: ${filename}`);
-            return response.data;
-          })
-          .catch(error => {
-            console.error(`❌ Error uploading BOL attachment: ${error.message}`);
-            throw error;
-          });
+        } else if (typeof file === 'string') {
+          // Base64 string upload
+          return window.uploadBOLBase64(file, options.filename);
+        } else if (file && file.attachmentData) {
+          // Attachment data upload
+          return window.uploadBOLAttachment(file.attachmentData, file.filename);
         } else {
-          console.error('❌ Invalid file format provided');
           return Promise.reject(new Error('Invalid file format'));
         }
       };
 
-      // Function to handle base64 file uploads
+      // Function to upload base64 encoded files
       window.uploadBOLBase64 = function(base64Data, filename = 'attachment.pdf') {
         if (!base64Data) {
-          console.error('❌ No base64 data provided');
           return Promise.reject(new Error('No base64 data provided'));
         }
 
@@ -645,13 +706,90 @@
           });
       };
 
+      // Function to download and automatically cleanup
+      window.downloadBOLFileAndReset = function(filename) {
+        try {
+          console.log(`📥 Starting download and reset workflow for: ${filename || 'default file'}`);
+          
+          // Trigger download
+          window.downloadBOLFile(filename);
+          
+          // Wait for download to start, then cleanup using new auto-reset endpoint
+          setTimeout(() => {
+            axios.post('/auto-reset')
+              .then(result => {
+                console.log('🧹 Auto-cleanup completed:', result.data);
+                // If this is running in the main app, trigger reset
+                if (window.vueApp && window.vueApp.resetAppState) {
+                  window.vueApp.resetAppState();
+                }
+                return result.data;
+              })
+              .catch(error => {
+                console.error('❌ Auto-cleanup failed:', error);
+              });
+          }, 2000);
+          
+          return true;
+        } catch (error) {
+          console.error(`❌ Error in download and reset workflow: ${error.message}`);
+          return false;
+        }
+      };
+
+      // Function to reset the entire application state
+      window.resetBOLApplication = function() {
+        try {
+          console.log('🔄 Resetting BOL application state...');
+          
+          // Use the new auto-reset endpoint
+          return axios.post('/auto-reset')
+            .then(result => {
+              console.log('✅ Backend reset completed:', result.data);
+              
+              // If this is running in the main app, trigger frontend reset
+              if (window.vueApp && window.vueApp.resetAppState) {
+                window.vueApp.resetAppState();
+                console.log('✅ Frontend state reset');
+              }
+              
+              // Optional: Refresh the page as ultimate fallback
+              setTimeout(() => {
+                if (window.location.reload) {
+                  console.log('🔄 Refreshing page to ensure clean state...');
+                  window.location.reload();
+                }
+              }, 1000);
+              
+              return result.data;
+            })
+            .catch(error => {
+              console.error('❌ Error resetting application:', error);
+              throw error;
+            });
+        } catch (error) {
+          console.error(`❌ Error in reset workflow: ${error.message}`);
+          return Promise.reject(error);
+        }
+      };
+
+      // Complete workflow function for external apps
+      window.completeBOLWorkflow = function(filename = null) {
+        console.log('🎯 Completing BOL workflow and auto-resetting...');
+        
+        return window.downloadBOLFileAndReset(filename);
+      };
+
       // Export functions for use in other scripts
       window.BOLProcessor = {
         downloadFile: window.downloadBOLFile,
+        downloadAndReset: window.downloadBOLFileAndReset,
         getStatus: window.getBOLStatus,
         getFiles: window.getBOLFiles,
         processWorkflow: window.processBOLWorkflow,
         clearSession: window.clearBOLSession,
+        resetApplication: window.resetBOLApplication,
+        completeWorkflow: window.completeBOLWorkflow,
         ping: window.pingBOLService,
         uploadFile: window.uploadBOLFile,
         uploadBase64: window.uploadBOLBase64,
@@ -659,57 +797,7 @@
         processDedicated: window.processBOLWithDedicatedProcessor
       };
 
-      console.log('🚀 BOL Processor JavaScript functions loaded');
+      console.log('🚀 BOL Processor JavaScript functions loaded and ready');
     </script>
-
-    <style>
-      @keyframes fade-in {
-        from {
-          opacity: 0;
-          transform: translateY(10px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
-      .animate-fade-in {
-        animation: fade-in 0.3s ease-out;
-      }
-
-      @keyframes pulse-attention {
-        0%,
-        100% {
-          opacity: 1;
-          color: #f97316; /* orange-500 */
-          transform: scale(1);
-        }
-        50% {
-          opacity: 0.6;
-          color: #ea580c; /* orange-600 */
-          transform: scale(1.1);
-        }
-      }
-
-      @keyframes pulse-text {
-        0%,
-        100% {
-          opacity: 1;
-          color: #f97316; /* orange-500 */
-        }
-        50% {
-          opacity: 0.7;
-          color: #ea580c; /* orange-600 */
-        }
-      }
-
-      .animate-pulse-attention {
-        animation: pulse-attention 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-      }
-
-      .animate-pulse-text {
-        animation: pulse-text 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-      }
-    </style>
   </body>
 </html>

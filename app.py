@@ -779,27 +779,83 @@ def process_workflow():
 def clear_session():
     """Clear the current session and start fresh."""
     try:
+        old_session_id = None
+        
+        # Get session ID from multiple sources
         if 'session_id' in session:
             old_session_id = session['session_id']
             session.pop('session_id', None)
-            
-            # Clean up old session directory
+        
+        # Also check query parameters for external sessions
+        external_session_id = request.args.get('_sid') or request.args.get('session_id')
+        if external_session_id:
+            old_session_id = external_session_id
+        
+        # Clean up old session directory
+        if old_session_id:
             old_session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', old_session_id)
             if os.path.exists(old_session_dir):
                 import shutil
                 shutil.rmtree(old_session_dir)
+                print(f"🧹 Cleaned up session directory: {old_session_id}")
         
         # Create new session
         processor = get_or_create_session()
         
         return jsonify({
             'status': 'success',
-            'message': 'Session cleared successfully',
-            'new_session_id': processor.session_id
+            'message': 'Session cleared and ready for new workflow',
+            'old_session_id': old_session_id,
+            'new_session_id': processor.session_id,
+            'cleanup_completed': True
         })
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'message': 'Failed to clear session properly'
+        }), 500
+
+@app.route('/auto-reset', methods=['POST'])
+def auto_reset():
+    """Endpoint specifically for automatic reset after download completion."""
+    try:
+        print("🔄 Auto-reset triggered after download completion")
+        
+        # Get current session info
+        processor = get_or_create_session()
+        current_session = processor.session_id
+        
+        # Clear current session
+        if 'session_id' in session:
+            session.pop('session_id', None)
+            
+        # Clean up session directory
+        session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', current_session)
+        if os.path.exists(session_dir):
+            import shutil
+            shutil.rmtree(session_dir)
+            print(f"🧹 Auto-cleanup completed for session: {current_session}")
+        
+        # Create fresh session
+        new_processor = get_or_create_session()
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Auto-reset completed successfully',
+            'old_session_id': current_session,
+            'new_session_id': new_processor.session_id,
+            'ready_for_next_workflow': True
+        })
+        
+    except Exception as e:
+        print(f"❌ Auto-reset failed: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'message': 'Auto-reset failed'
+        }), 500
 
 @app.route('/ping')
 def ping():
