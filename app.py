@@ -1477,7 +1477,7 @@ def handle_preflight():
     if request.method == "OPTIONS":
         response = make_response()
         response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers['Access-Control-Allow-Headers'] = "Content-Type,Authorization,X-Requested-With,Cache-Control,Pragma,Expires"
+        response.headers['Access-Control-Allow-Headers'] = "Content-Type,Authorization,X-Requested-With,Cache-Control,Pragma,Expires,X-API-Key,X-Custom-Header,X-Session-ID"
         response.headers['Access-Control-Allow-Methods'] = "GET,PUT,POST,DELETE,OPTIONS"
         response.headers['Access-Control-Max-Age'] = '86400'
         return response
@@ -1487,7 +1487,7 @@ def handle_options(path):
     """Handle OPTIONS requests for all paths."""
     response = make_response()
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers['Access-Control-Allow-Headers'] = "Content-Type,Authorization,X-Requested-With,Cache-Control,Pragma,Expires"
+    response.headers['Access-Control-Allow-Headers'] = "Content-Type,Authorization,X-Requested-With,Cache-Control,Pragma,Expires,X-API-Key,X-Custom-Header,X-Session-ID"
     response.headers['Access-Control-Allow-Methods'] = "GET,PUT,POST,DELETE,OPTIONS"
     response.headers['Access-Control-Max-Age'] = '86400'
     return response
@@ -1504,7 +1504,7 @@ def after_request(response):
     
     # Add fresh CORS headers
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With,Cache-Control,Pragma,Expires'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With,Cache-Control,Pragma,Expires,X-API-Key,X-Custom-Header,X-Session-ID'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS, PUT, DELETE'
     response.headers['Access-Control-Allow-Credentials'] = 'false'
     response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
