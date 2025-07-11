@@ -737,6 +737,21 @@
         }
       };
 
+      // Function to create a new session explicitly
+      window.createNewBOLSession = function() {
+        console.log('🆕 Creating new BOL session...');
+        
+        return axios.post('/new-session')
+          .then(response => {
+            console.log('✅ New session created:', response.data);
+            return response.data;
+          })
+          .catch(error => {
+            console.error('❌ Error creating new session:', error);
+            throw error;
+          });
+      };
+
       // Function to reset the entire application state
       window.resetBOLApplication = function() {
         try {
@@ -753,14 +768,6 @@
                 console.log('✅ Frontend state reset');
               }
               
-              // Optional: Refresh the page as ultimate fallback
-              setTimeout(() => {
-                if (window.location.reload) {
-                  console.log('🔄 Refreshing page to ensure clean state...');
-                  window.location.reload();
-                }
-              }, 1000);
-              
               return result.data;
             })
             .catch(error => {
@@ -771,6 +778,21 @@
           console.error(`❌ Error in reset workflow: ${error.message}`);
           return Promise.reject(error);
         }
+      };
+
+      // Enhanced status function with debugging
+      window.getBOLStatusDetailed = function(sessionId = null) {
+        const url = sessionId ? `/status?_sid=${sessionId}` : '/status';
+        
+        return axios.get(url)
+          .then(response => {
+            console.log('📊 Detailed BOL Status:', response.data);
+            return response.data;
+          })
+          .catch(error => {
+            console.error('❌ Error getting detailed BOL status:', error);
+            return null;
+          });
       };
 
       // Complete workflow function for external apps
@@ -785,9 +807,11 @@
         downloadFile: window.downloadBOLFile,
         downloadAndReset: window.downloadBOLFileAndReset,
         getStatus: window.getBOLStatus,
+        getStatusDetailed: window.getBOLStatusDetailed,
         getFiles: window.getBOLFiles,
         processWorkflow: window.processBOLWorkflow,
         clearSession: window.clearBOLSession,
+        createNewSession: window.createNewBOLSession,
         resetApplication: window.resetBOLApplication,
         completeWorkflow: window.completeBOLWorkflow,
         ping: window.pingBOLService,

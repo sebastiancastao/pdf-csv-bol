@@ -2,6 +2,7 @@ import os
 import csv
 import math
 import shutil
+import time
 from pathlib import Path
 import platform
 import pandas as pd
@@ -319,13 +320,30 @@ def cleanup_old_files():
 
 def get_or_create_session():
     """Get existing processor or create new one with session management."""
+    # Check for action parameter to force new session creation
+    action = request.args.get('_action')
+    force_new_session = action == 'new_session'
+    
     # Check for session ID in query parameters first (for external apps)
     external_session_id = request.args.get('_sid') or request.args.get('session_id')
     
+    # If force new session is requested, always create a new session
+    if force_new_session:
+        processor = DataProcessor()  # Creates new session
+        print(f"🆕 Force creating new session due to _action=new_session: {processor.session_id}")
+        return processor
+    
     # Use external session ID if provided, otherwise use Flask session
     if external_session_id:
-        processor = DataProcessor(session_id=external_session_id)
-        print(f"Using external session ID: {external_session_id}")
+        # Check if this session exists and has data
+        session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', external_session_id)
+        if os.path.exists(session_dir):
+            processor = DataProcessor(session_id=external_session_id)
+            print(f"♻️ Reusing existing external session: {external_session_id}")
+        else:
+            # External session doesn't exist, create new one with the requested ID
+            processor = DataProcessor(session_id=external_session_id)
+            print(f"🆕 Creating new external session with requested ID: {external_session_id}")
         return processor
     
     if 'session_id' not in session:
@@ -365,6 +383,22 @@ def get_or_create_session():
 def index():
     # Get or create session without cleaning up existing valid sessions
     processor = get_or_create_session()
+    
+    # For external apps requesting JSON response
+    if request.headers.get('Accept') == 'application/json' or request.args.get('format') == 'json':
+        return jsonify({
+            'status': 'ready',
+            'session_id': processor.session_id,
+            'message': 'BOL Extractor ready for processing',
+            'endpoints': {
+                'upload': '/upload',
+                'upload_base64': '/upload-base64',
+                'upload_attachment': '/upload-attachment',
+                'status': '/status',
+                'files': '/files'
+            }
+        })
+    
     return render_template('index.html')
 
 @app.route('/process', methods=['POST'])
@@ -678,7 +712,13 @@ def get_status():
         status = {
             'session_id': processor.session_id,
             'has_processed_data': os.path.exists(csv_path),
-            'session_dir': processor.session_dir
+            'session_dir': processor.session_dir,
+            'session_exists': os.path.exists(processor.session_dir),
+            'query_params': {
+                '_sid': request.args.get('_sid'),
+                '_action': request.args.get('_action'),
+                '_t': request.args.get('_t')
+            }
         }
         
         # Check for available files
@@ -693,6 +733,17 @@ def get_status():
                         'type': 'csv' if file.endswith('.csv') else 'pdf'
                     })
             status['available_files'] = files
+        else:
+            status['available_files'] = []
+        
+        # Add session age information
+        try:
+            session_creation_time = os.path.getctime(processor.session_dir) if os.path.exists(processor.session_dir) else None
+            if session_creation_time:
+                import time
+                status['session_age_seconds'] = time.time() - session_creation_time
+        except:
+            status['session_age_seconds'] = None
         
         return jsonify(status)
     except Exception as e:
@@ -857,6 +908,80 @@ def auto_reset():
             'message': 'Auto-reset failed'
         }), 500
 
+@app.route('/new-session', methods=['GET', 'POST'])
+def new_session():
+    """Create a new session explicitly (for external apps)."""
+    try:
+        # Always create a new session
+        processor = DataProcessor()
+        
+        return jsonify({
+            'status': 'success',
+            'session_id': processor.session_id,
+            'message': 'New session created successfully',
+            'ready_for_upload': True,
+            'endpoints': {
+                'upload': '/upload',
+                'upload_base64': '/upload-base64',
+                'upload_attachment': '/upload-attachment',
+                'status': f'/status?_sid={processor.session_id}',
+                'files': f'/files?_sid={processor.session_id}'
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'message': 'Failed to create new session'
+        }), 500
+
+@app.route('/debug-sessions')
+def debug_sessions():
+    """Debug endpoint to show session information."""
+    try:
+        sessions_info = []
+        base_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions')
+        
+        if os.path.exists(base_dir):
+            for session_dir in os.listdir(base_dir):
+                full_path = os.path.join(base_dir, session_dir)
+                if os.path.isdir(full_path):
+                    # Get session info
+                    files = []
+                    for file in os.listdir(full_path):
+                        file_path = os.path.join(full_path, file)
+                        files.append({
+                            'name': file,
+                            'size': os.path.getsize(file_path),
+                            'modified': os.path.getmtime(file_path)
+                        })
+                    
+                    sessions_info.append({
+                        'session_id': session_dir,
+                        'created': os.path.getctime(full_path),
+                        'modified': os.path.getmtime(full_path),
+                        'files': files,
+                        'has_combined_csv': any(f['name'] == OUTPUT_CSV_NAME for f in files)
+                    })
+        
+        current_session = get_or_create_session()
+        
+        return jsonify({
+            'current_session_id': current_session.session_id,
+            'total_sessions': len(sessions_info),
+            'sessions': sessions_info,
+            'query_params': dict(request.args),
+            'request_headers': dict(request.headers),
+            'timestamp': time.time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'message': 'Debug endpoint failed'
+        }), 500
+
 @app.route('/ping')
 def ping():
     """Simple ping endpoint to check if the service is alive."""
@@ -884,8 +1009,10 @@ def api_health():
                 'files': '/files',
                 'process_workflow': '/process-workflow',
                 'clear_session': '/clear-session',
+                'new_session': '/new-session',
                 'ping': '/ping',
-                'api_docs': '/api/docs'
+                'api_docs': '/api/docs',
+                'debug': '/debug-sessions'
             }
         })
     except Exception as e:
@@ -994,7 +1121,7 @@ def handle_preflight():
     if request.method == "OPTIONS":
         response = make_response()
         response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers['Access-Control-Allow-Headers'] = "Content-Type,Authorization,X-Requested-With"
+        response.headers['Access-Control-Allow-Headers'] = "Content-Type,Authorization,X-Requested-With,Cache-Control,Pragma,Expires"
         response.headers['Access-Control-Allow-Methods'] = "GET,PUT,POST,DELETE,OPTIONS"
         response.headers['Access-Control-Max-Age'] = '86400'
         return response
@@ -1004,7 +1131,7 @@ def handle_options(path):
     """Handle OPTIONS requests for all paths."""
     response = make_response()
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers['Access-Control-Allow-Headers'] = "Content-Type,Authorization,X-Requested-With"
+    response.headers['Access-Control-Allow-Headers'] = "Content-Type,Authorization,X-Requested-With,Cache-Control,Pragma,Expires"
     response.headers['Access-Control-Allow-Methods'] = "GET,PUT,POST,DELETE,OPTIONS"
     response.headers['Access-Control-Max-Age'] = '86400'
     return response
@@ -1021,7 +1148,7 @@ def after_request(response):
     
     # Add fresh CORS headers
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With,Cache-Control,Pragma,Expires'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS, PUT, DELETE'
     response.headers['Access-Control-Allow-Credentials'] = 'false'
     response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
