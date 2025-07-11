@@ -619,40 +619,128 @@ def upload_csv():
         # Get existing processor with session directory
         processor = get_or_create_session()
         
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file uploaded'}), 400
-            
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'No selected file'}), 400
-            
-        if not allowed_file(file.filename, ALLOWED_CSV_EXTENSIONS):
-            return jsonify({'error': 'Invalid file type. Please upload a CSV or Excel file'}), 400
-            
-        # Save uploaded file to session directory
-        filename = secure_filename(f"temp_{file.filename}")
-        file_path = os.path.join(processor.session_dir, filename)
+        print(f"📄 CSV Upload Request - Session: {processor.session_id}")
+        print(f"Content-Type: {request.content_type}")
+        print(f"Request method: {request.method}")
+        print(f"Files: {list(request.files.keys())}")
+        print(f"Form data: {list(request.form.keys())}")
+        print(f"JSON data: {request.is_json}")
+        
+        file_path = None
         
         try:
-            file.save(file_path)
-            success, message = process_csv_file(file_path, processor.session_dir)
-            
-            if not success:
-                return jsonify({'error': message}), 400
+            # Method 1: Handle file upload (multipart/form-data)
+            if 'file' in request.files:
+                file = request.files['file']
+                if file.filename != '':
+                    if not allowed_file(file.filename, ALLOWED_CSV_EXTENSIONS):
+                        return jsonify({'error': 'Invalid file type. Please upload a CSV or Excel file'}), 400
+                    
+                    filename = secure_filename(f"temp_{file.filename}")
+                    file_path = os.path.join(processor.session_dir, filename)
+                    file.save(file_path)
+                    print(f"✅ CSV file saved via multipart upload")
+                    
+            # Method 2: Handle JSON data with CSV content
+            elif request.is_json:
+                json_data = request.get_json()
+                print(f"📄 JSON data keys: {list(json_data.keys()) if json_data else 'None'}")
                 
-            return jsonify({
-                'message': 'CSV data mapped successfully',
-                'status': 'success'
-            }), 200
+                if json_data and 'csv_data' in json_data:
+                    csv_content = json_data['csv_data']
+                    filename = json_data.get('filename', 'uploaded_data.csv')
+                    
+                    # Save CSV content to file
+                    filename = secure_filename(f"temp_{filename}")
+                    file_path = os.path.join(processor.session_dir, filename)
+                    
+                    with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                        f.write(csv_content)
+                    print(f"✅ CSV data saved from JSON")
+                    
+                elif json_data and 'file_data' in json_data:
+                    # Handle base64 encoded CSV
+                    import base64
+                    file_data = json_data['file_data']
+                    filename = json_data.get('filename', 'uploaded_data.csv')
+                    
+                    # Decode base64 if needed
+                    if isinstance(file_data, str) and file_data.startswith('data:'):
+                        # Handle data URL format
+                        header, data = file_data.split(',', 1)
+                        csv_content = base64.b64decode(data).decode('utf-8')
+                    else:
+                        csv_content = file_data
+                    
+                    filename = secure_filename(f"temp_{filename}")
+                    file_path = os.path.join(processor.session_dir, filename)
+                    
+                    with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                        f.write(csv_content)
+                    print(f"✅ CSV data saved from base64")
+                    
+            # Method 3: Handle raw CSV data in form field
+            elif 'csv_data' in request.form:
+                csv_content = request.form['csv_data']
+                filename = request.form.get('filename', 'uploaded_data.csv')
+                
+                filename = secure_filename(f"temp_{filename}")
+                file_path = os.path.join(processor.session_dir, filename)
+                
+                with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                    f.write(csv_content)
+                print(f"✅ CSV data saved from form field")
+                
+            # Method 4: Handle raw CSV data in request body
+            elif request.content_type and 'text/csv' in request.content_type:
+                csv_content = request.get_data(as_text=True)
+                filename = 'uploaded_data.csv'
+                
+                filename = secure_filename(f"temp_{filename}")
+                file_path = os.path.join(processor.session_dir, filename)
+                
+                with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                    f.write(csv_content)
+                print(f"✅ CSV data saved from raw body")
+                
+            else:
+                return jsonify({
+                    'error': 'No CSV data provided',
+                    'expected_formats': [
+                        'multipart/form-data with file field',
+                        'application/json with csv_data field',
+                        'application/json with file_data field',
+                        'form data with csv_data field',
+                        'text/csv content-type with CSV in body'
+                    ]
+                }), 400
             
+            # Process the CSV file
+            if file_path and os.path.exists(file_path):
+                success, message = process_csv_file(file_path, processor.session_dir)
+                
+                if not success:
+                    return jsonify({'error': message}), 400
+                    
+                return jsonify({
+                    'message': 'CSV data mapped successfully',
+                    'status': 'success',
+                    'session_id': processor.session_id
+                }), 200
+            else:
+                return jsonify({'error': 'Failed to save CSV data'}), 500
+                
         finally:
             # Clean up temporary file
-            if os.path.exists(file_path):
+            if file_path and os.path.exists(file_path):
                 os.remove(file_path)
+                print(f"🧹 Cleaned up temporary file: {file_path}")
                 
     except Exception as e:
-        print(f"Upload error: {str(e)}")  # For debugging
-        return jsonify({'error': 'An unexpected error occurred'}), 500
+        print(f"❌ CSV Upload error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'An unexpected error occurred: {str(e)}'}), 500
 
 @app.route('/download')
 def download_file():
@@ -982,6 +1070,62 @@ def debug_sessions():
             'message': 'Debug endpoint failed'
         }), 500
 
+@app.route('/debug-request', methods=['GET', 'POST', 'PUT', 'DELETE'])
+def debug_request():
+    """Debug endpoint to show what the external app is sending."""
+    try:
+        debug_info = {
+            'method': request.method,
+            'url': request.url,
+            'path': request.path,
+            'query_params': dict(request.args),
+            'headers': dict(request.headers),
+            'content_type': request.content_type,
+            'content_length': request.content_length,
+            'is_json': request.is_json,
+            'timestamp': time.time()
+        }
+        
+        # Try to get request data in different formats
+        try:
+            if request.is_json:
+                debug_info['json_data'] = request.get_json()
+            else:
+                debug_info['json_data'] = None
+        except:
+            debug_info['json_data'] = 'Error parsing JSON'
+        
+        try:
+            debug_info['form_data'] = dict(request.form)
+        except:
+            debug_info['form_data'] = 'Error parsing form data'
+        
+        try:
+            debug_info['files'] = list(request.files.keys())
+        except:
+            debug_info['files'] = 'Error parsing files'
+        
+        try:
+            raw_data = request.get_data(as_text=True)
+            debug_info['raw_data'] = raw_data[:500] + '...' if len(raw_data) > 500 else raw_data
+            debug_info['raw_data_length'] = len(raw_data)
+        except:
+            debug_info['raw_data'] = 'Error getting raw data'
+        
+        print(f"🔍 Debug Request: {debug_info}")
+        
+        return jsonify({
+            'status': 'debug_complete',
+            'request_info': debug_info,
+            'message': 'Request debugging information captured'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'message': 'Debug request failed'
+        }), 500
+
 @app.route('/ping')
 def ping():
     """Simple ping endpoint to check if the service is alive."""
@@ -1012,7 +1156,8 @@ def api_health():
                 'new_session': '/new-session',
                 'ping': '/ping',
                 'api_docs': '/api/docs',
-                'debug': '/debug-sessions'
+                'debug': '/debug-sessions',
+                'debug_request': '/debug-request'
             }
         })
     except Exception as e:

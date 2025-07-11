@@ -217,7 +217,7 @@
           v-if="error"
           class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 animate-fade-in"
         >
-          <div class="flex items-center">
+                <div class="flex items-center">
             <svg
               class="h-5 w-5 text-red-400 mr-2"
               fill="none"
@@ -230,13 +230,13 @@
                 stroke-width="2"
                 d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"
               />
-            </svg>
+                    </svg>
             <div>
               <h3 class="text-sm font-medium text-red-800">Error</h3>
               <p class="text-sm text-red-700">{{ error }}</p>
             </div>
           </div>
-        </div>
+                </div>
 
         <!-- Success/Complete State -->
         <div
@@ -292,7 +292,7 @@
     <script>
       // Vue.js 3 Application
       const { createApp } = Vue;
-      
+
       // Create and mount the Vue app
       window.vueApp = createApp({
         data() {
@@ -407,7 +407,7 @@
           async initiateDownloadAndCleanup() {
             try {
               // Start download
-              window.location.href = "/download";
+            window.location.href = "/download";
               
               // Show cleanup message
               this.showMessage("Download started. Preparing for next workflow...");
