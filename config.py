@@ -2,7 +2,7 @@ import os
 import platform
 
 # OpenAI Configuration
-OPENAI_API_KEY = os.environ.get("OPEN_AI_API_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPEN_AI_API_KEY")
 
 # Poppler Configuration
 if platform.system() == "Windows":
@@ -14,7 +14,7 @@ else:
 # File Processing
 OUTPUT_CSV_NAME = "combined_data.csv"
 
-# Models
+# Modelss
 OPENAI_MODEL = "o3-mini"
 
 # Animation Settings
