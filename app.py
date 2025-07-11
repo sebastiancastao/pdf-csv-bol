@@ -432,14 +432,19 @@ def upload_file():
     # Get existing processor with session directory
     processor = get_or_create_session()
     
+    print(f"📤 PDF Upload Request - Session: {processor.session_id}")
+    
     if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
+        print("❌ No file part in request")
+        return jsonify({'error': 'No file part in request'}), 400
         
     file = request.files['file']
     if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
+        print("❌ No file selected")
+        return jsonify({'error': 'No file selected'}), 400
         
     if not allowed_file(file.filename, ALLOWED_PDF_EXTENSIONS):
+        print(f"❌ Invalid file type: {file.filename}")
         return jsonify({'error': 'Invalid file type (PDF required)'}), 400
         
     try:
@@ -448,23 +453,58 @@ def upload_file():
         file_path = os.path.join(processor.session_dir, filename)
         file.save(file_path)
         
+        print(f"📏 Saved PDF size: {os.path.getsize(file_path)} bytes")
+        print(f"📄 PDF saved to: {file_path}")
+        print(f"📁 Session directory: {processor.session_dir}")
+        
         # Process the PDF through our pipeline
+        print("🔄 Initializing PDF processor...")
         pdf_processor = PDFProcessor(session_dir=processor.session_dir)
+        
+        print("🔄 Processing PDF...")
         if not pdf_processor.process_first_pdf():
-            return jsonify({'error': 'Failed to process PDF'}), 500
-            
+            print("❌ PDF processing failed - check logs for details")
+            return jsonify({
+                'error': 'PDF processing failed',
+                'details': 'Could not extract text from PDF. Check server logs for more details.',
+                'session_id': processor.session_id
+            }), 500
+        
+        print("🔄 Processing extracted text files...")
         if not processor.process_all_files():
-            return jsonify({'error': 'Failed to process text files'}), 500
+            print("❌ Text processing failed - check logs for details")
+            return jsonify({
+                'error': 'Text processing failed',
+                'details': 'Could not process extracted text files. Check server logs for more details.',
+                'session_id': processor.session_id
+            }), 500
             
         # Create exporter with the same session directory
+        print("🔄 Creating final CSV...")
         exporter = CSVExporter(session_dir=processor.session_dir)
         if not exporter.combine_to_csv():
-            return jsonify({'error': 'Failed to create CSV file'}), 500
+            print("❌ CSV creation failed - check logs for details")
+            return jsonify({
+                'error': 'CSV creation failed',
+                'details': 'Could not create final CSV file. Check server logs for more details.',
+                'session_id': processor.session_id
+            }), 500
             
-        return jsonify({'message': 'File processed successfully'}), 200
+        print("✅ PDF processed successfully!")
+        return jsonify({
+            'message': 'PDF processed successfully',
+            'filename': filename,
+            'session_id': processor.session_id
+        }), 200
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        error_msg = str(e)
+        print(f"❌ Unexpected error during PDF processing: {error_msg}")
+        return jsonify({
+            'error': 'Unexpected error during PDF processing',
+            'details': error_msg,
+            'session_id': processor.session_id if 'processor' in locals() else None
+        }), 500
 
 @app.route('/upload-base64', methods=['POST'])
 def upload_base64():
@@ -473,9 +513,12 @@ def upload_base64():
         # Get existing processor with session directory
         processor = get_or_create_session()
         
+        print(f"📤 Base64 Upload Request - Session: {processor.session_id}")
+        
         # Parse JSON request
         data = request.get_json()
         if not data:
+            print("❌ No JSON data provided")
             return jsonify({'error': 'No JSON data provided'}), 400
             
         # Get file data from request
@@ -483,6 +526,7 @@ def upload_base64():
         filename = data.get('filename') or data.get('name', 'attachment.pdf')
         
         if not file_data:
+            print("❌ No file data provided")
             return jsonify({'error': 'No file data provided'}), 400
         
         # Handle base64 encoded data
@@ -507,30 +551,62 @@ def upload_base64():
             with open(file_path, 'wb') as f:
                 f.write(decoded_data)
             
+            print(f"📄 Base64 PDF saved to: {file_path} ({len(decoded_data)} bytes)")
+            print(f"📁 Session directory: {processor.session_dir}")
+            
             # Process the PDF through our pipeline
+            print("🔄 Initializing PDF processor...")
             pdf_processor = PDFProcessor(session_dir=processor.session_dir)
+            
+            print("🔄 Processing PDF...")
             if not pdf_processor.process_first_pdf():
-                return jsonify({'error': 'Failed to process PDF'}), 500
+                print("❌ PDF processing failed - check logs for details")
+                return jsonify({
+                    'error': 'PDF processing failed',
+                    'details': 'Could not extract text from PDF. Check server logs for more details.',
+                    'session_id': processor.session_id
+                }), 500
                 
+            print("🔄 Processing extracted text files...")
             if not processor.process_all_files():
-                return jsonify({'error': 'Failed to process text files'}), 500
+                print("❌ Text processing failed - check logs for details")
+                return jsonify({
+                    'error': 'Text processing failed',
+                    'details': 'Could not process extracted text files. Check server logs for more details.',
+                    'session_id': processor.session_id
+                }), 500
                 
             # Create exporter with the same session directory
+            print("🔄 Creating final CSV...")
             exporter = CSVExporter(session_dir=processor.session_dir)
             if not exporter.combine_to_csv():
-                return jsonify({'error': 'Failed to create CSV file'}), 500
+                print("❌ CSV creation failed - check logs for details")
+                return jsonify({
+                    'error': 'CSV creation failed',
+                    'details': 'Could not create final CSV file. Check server logs for more details.',
+                    'session_id': processor.session_id
+                }), 500
                 
+            print("✅ Base64 PDF processed successfully!")
             return jsonify({
-                'message': 'File processed successfully',
+                'message': 'Base64 PDF processed successfully',
                 'filename': filename,
-                'file_size': len(decoded_data)
+                'file_size': len(decoded_data),
+                'session_id': processor.session_id
             }), 200
             
         except Exception as decode_error:
+            print(f"❌ Failed to decode base64 data: {str(decode_error)}")
             return jsonify({'error': f'Failed to decode file data: {str(decode_error)}'}), 400
             
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        error_msg = str(e)
+        print(f"❌ Unexpected error during base64 upload: {error_msg}")
+        return jsonify({
+            'error': 'Unexpected error during base64 upload',
+            'details': error_msg,
+            'session_id': processor.session_id if 'processor' in locals() else None
+        }), 500
 
 @app.route('/upload-attachment', methods=['POST'])
 def upload_attachment():
@@ -538,6 +614,8 @@ def upload_attachment():
     try:
         # Get existing processor with session directory
         processor = get_or_create_session()
+        
+        print(f"📤 Attachment Upload Request - Session: {processor.session_id}")
         
         # Try to get data from different sources
         data = None
@@ -550,6 +628,7 @@ def upload_attachment():
             data = request.form.to_dict()
         
         if not data:
+            print("❌ No data provided")
             return jsonify({'error': 'No data provided'}), 400
         
         # Get file information
@@ -557,6 +636,7 @@ def upload_attachment():
         filename = data.get('filename') or data.get('name', 'attachment.pdf')
         
         if not attachment_data:
+            print("❌ No attachment data provided")
             return jsonify({'error': 'No attachment data provided'}), 400
         
         # Handle different data formats
@@ -573,6 +653,7 @@ def upload_attachment():
                         attachment_data = attachment_data.split(',')[1]
                     file_bytes = base64.b64decode(attachment_data)
                 else:
+                    print("❌ Invalid attachment data format")
                     return jsonify({'error': 'Invalid attachment data format'}), 400
             
             # Secure filename
@@ -587,31 +668,63 @@ def upload_attachment():
             with open(file_path, 'wb') as f:
                 f.write(file_bytes)
             
+            print(f"📄 Attachment saved to: {file_path} ({len(file_bytes)} bytes)")
+            print(f"📁 Session directory: {processor.session_dir}")
+            
             # Process the PDF through our pipeline
+            print("🔄 Initializing PDF processor...")
             pdf_processor = PDFProcessor(session_dir=processor.session_dir)
+            
+            print("🔄 Processing PDF...")
             if not pdf_processor.process_first_pdf():
-                return jsonify({'error': 'Failed to process PDF'}), 500
+                print("❌ PDF processing failed - check logs for details")
+                return jsonify({
+                    'error': 'PDF processing failed',
+                    'details': 'Could not extract text from PDF. Check server logs for more details.',
+                    'session_id': processor.session_id
+                }), 500
                 
+            print("🔄 Processing extracted text files...")
             if not processor.process_all_files():
-                return jsonify({'error': 'Failed to process text files'}), 500
+                print("❌ Text processing failed - check logs for details")
+                return jsonify({
+                    'error': 'Text processing failed',
+                    'details': 'Could not process extracted text files. Check server logs for more details.',
+                    'session_id': processor.session_id
+                }), 500
                 
             # Create exporter with the same session directory
+            print("🔄 Creating final CSV...")
             exporter = CSVExporter(session_dir=processor.session_dir)
             if not exporter.combine_to_csv():
-                return jsonify({'error': 'Failed to create CSV file'}), 500
+                print("❌ CSV creation failed - check logs for details")
+                return jsonify({
+                    'error': 'CSV creation failed',
+                    'details': 'Could not create final CSV file. Check server logs for more details.',
+                    'session_id': processor.session_id
+                }), 500
                 
+            print("✅ Attachment processed successfully!")
             return jsonify({
                 'message': 'Attachment processed successfully',
                 'filename': filename,
                 'file_size': len(file_bytes),
+                'session_id': processor.session_id,
                 'status': 'success'
             }), 200
             
         except Exception as decode_error:
+            print(f"❌ Failed to process attachment data: {str(decode_error)}")
             return jsonify({'error': f'Failed to process attachment data: {str(decode_error)}'}), 400
             
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        error_msg = str(e)
+        print(f"❌ Unexpected error during attachment upload: {error_msg}")
+        return jsonify({
+            'error': 'Unexpected error during attachment upload',
+            'details': error_msg,
+            'session_id': processor.session_id if 'processor' in locals() else None
+        }), 500
 
 @app.route('/upload-csv', methods=['POST'])
 def upload_csv():
@@ -1302,5 +1415,5 @@ def after_request(response):
     return response
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
