@@ -1,0 +1,263 @@
+{
+  "client": "Thunder Client",
+  "collectionName": "BOL Processor API",
+  "dateExported": "2024-01-01T00:00:00.000Z",
+  "version": "1.1",
+  "folders": [
+    {
+      "id": "basic-workflow",
+      "name": "Basic Workflow",
+      "containerId": "",
+      "created": "2024-01-01T00:00:00.000Z",
+      "sortNum": 10000
+    },
+    {
+      "id": "advanced-features",
+      "name": "Advanced Features", 
+      "containerId": "",
+      "created": "2024-01-01T00:00:00.000Z",
+      "sortNum": 20000
+    },
+    {
+      "id": "session-management",
+      "name": "Session Management",
+      "containerId": "",
+      "created": "2024-01-01T00:00:00.000Z", 
+      "sortNum": 30000
+    },
+    {
+      "id": "utility-endpoints",
+      "name": "Utility Endpoints",
+      "containerId": "",
+      "created": "2024-01-01T00:00:00.000Z",
+      "sortNum": 40000
+    }
+  ],
+  "requests": [
+    {
+      "id": "upload-pdf",
+      "name": "1. Upload PDF File",
+      "url": "{{base_url}}/upload",
+      "method": "POST",
+      "headers": [],
+      "body": {
+        "type": "formdata",
+        "formdata": [
+          {
+            "name": "file",
+            "type": "file",
+            "src": ""
+          }
+        ]
+      },
+      "containerId": "basic-workflow",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 10000
+    },
+    {
+      "id": "upload-csv",
+      "name": "2. Upload CSV/Excel (Optional)",
+      "url": "{{base_url}}/upload-csv",
+      "method": "POST",
+      "headers": [],
+      "body": {
+        "type": "formdata",
+        "formdata": [
+          {
+            "name": "file",
+            "type": "file",
+            "src": ""
+          }
+        ]
+      },
+      "containerId": "basic-workflow",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 20000
+    },
+    {
+      "id": "download-results",
+      "name": "3. Download Results",
+      "url": "{{base_url}}/download-bol",
+      "method": "GET",
+      "headers": [],
+      "containerId": "basic-workflow",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 30000
+    },
+    {
+      "id": "upload-base64",
+      "name": "Upload Base64 PDF",
+      "url": "{{base_url}}/upload-base64",
+      "method": "POST",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "body": {
+        "type": "json",
+        "json": "{\n  \"file_data\": \"JVBERi0xLjQKMSAwIG9iag...\",\n  \"filename\": \"document.pdf\"\n}"
+      },
+      "containerId": "advanced-features",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 10000
+    },
+    {
+      "id": "upload-attachment",
+      "name": "Upload Attachment Data",
+      "url": "{{base_url}}/upload-attachment",
+      "method": "POST",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "body": {
+        "type": "json",
+        "json": "{\n  \"attachmentData\": \"base64_or_binary_data\",\n  \"filename\": \"attachment.pdf\"\n}"
+      },
+      "containerId": "advanced-features",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 20000
+    },
+    {
+      "id": "process-workflow",
+      "name": "Process Complete Workflow",
+      "url": "{{base_url}}/process-workflow",
+      "method": "POST",
+      "headers": [],
+      "containerId": "advanced-features",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 30000
+    },
+    {
+      "id": "new-session",
+      "name": "Create New Session",
+      "url": "{{base_url}}/new-session",
+      "method": "POST",
+      "headers": [],
+      "containerId": "session-management",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 10000
+    },
+    {
+      "id": "new-session-with-id",
+      "name": "Create Session with ID",
+      "url": "{{base_url}}/new-session?_sid=my_session_123",
+      "method": "POST",
+      "headers": [],
+      "containerId": "session-management",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 20000
+    },
+    {
+      "id": "clear-session",
+      "name": "Clear Session",
+      "url": "{{base_url}}/clear-session",
+      "method": "POST",
+      "headers": [],
+      "containerId": "session-management",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 30000
+    },
+    {
+      "id": "validate-session",
+      "name": "Validate Session",
+      "url": "{{base_url}}/validate-session?_sid=my_session_123",
+      "method": "GET",
+      "headers": [],
+      "containerId": "session-management",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 40000
+    },
+    {
+      "id": "get-status",
+      "name": "Get Status",
+      "url": "{{base_url}}/status",
+      "method": "GET",
+      "headers": [],
+      "containerId": "utility-endpoints",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 10000
+    },
+    {
+      "id": "list-files",
+      "name": "List Files",
+      "url": "{{base_url}}/files",
+      "method": "GET",
+      "headers": [],
+      "containerId": "utility-endpoints",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 20000
+    },
+    {
+      "id": "health-check",
+      "name": "Health Check",
+      "url": "{{base_url}}/health",
+      "method": "GET",
+      "headers": [],
+      "containerId": "utility-endpoints",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 30000
+    },
+    {
+      "id": "api-docs",
+      "name": "API Documentation",
+      "url": "{{base_url}}/api/docs",
+      "method": "GET",
+      "headers": [],
+      "containerId": "utility-endpoints",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 40000
+    },
+    {
+      "id": "ping",
+      "name": "Ping Service",
+      "url": "{{base_url}}/ping",
+      "method": "GET",
+      "headers": [],
+      "containerId": "utility-endpoints",
+      "created": "2024-01-01T00:00:00.000Z",
+      "modified": "2024-01-01T00:00:00.000Z",
+      "sortNum": 50000
+    }
+  ],
+  "environments": [
+    {
+      "id": "local-env",
+      "name": "Local Environment",
+      "variables": [
+        {
+          "name": "base_url",
+          "value": "http://localhost:8080"
+        }
+      ]
+    },
+    {
+      "id": "production-env",
+      "name": "Production Environment",
+      "variables": [
+        {
+          "name": "base_url",
+          "value": "https://your-production-url.com"
+        }
+      ]
+    }
+  ]
+} 

@@ -358,7 +358,7 @@ def get_or_create_session():
         
         if os.path.exists(session_dir):
             print(f"🔄 Using external session: {external_session_id} (directory exists)")
-            else:
+        else:
             print(f"🆕 Creating new external session: {external_session_id}")
         
         return processor
