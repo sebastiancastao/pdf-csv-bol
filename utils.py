@@ -7,9 +7,18 @@ from subprocess import Popen, PIPE
 import openai
 from config import OPENAI_API_KEY, POPPLER_PATH, TYPING_DELAY, LOADING_ANIMATION_CHARS
 
-# OpenAI setup
+# OpenAI setup - gracefully handle missing API key
 openai.api_key = OPENAI_API_KEY
-client = openai.OpenAI(api_key=openai.api_key)
+client = None
+
+try:
+    if OPENAI_API_KEY and OPENAI_API_KEY.strip():
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    else:
+        print("⚠️ OpenAI API key not configured - OpenAI features will be disabled")
+except Exception as e:
+    print(f"⚠️ Error initializing OpenAI client: {str(e)} - OpenAI features will be disabled")
+    client = None
 
 class PopplerNotFoundError(Exception):
     """Exception raised when Poppler is not found or not working properly."""
@@ -20,33 +29,33 @@ class PopplerUtils:
     def check_poppler_installation():
         """Check if Poppler is properly installed and accessible."""
         try:
-        if platform.system() == "Windows":
-            # On Windows, use the configured POPPLER_PATH and check for pdfinfo.exe
-            poppler_exe = os.path.join(POPPLER_PATH, "pdfinfo.exe")
-            if not os.path.exists(poppler_exe):
+            if platform.system() == "Windows":
+                # On Windows, use the configured POPPLER_PATH and check for pdfinfo.exe
+                poppler_exe = os.path.join(POPPLER_PATH, "pdfinfo.exe")
+                if not os.path.exists(poppler_exe):
                     raise PopplerNotFoundError(f"Poppler not found at {poppler_exe}")
                 
-            try:
-                process = Popen([poppler_exe], stdout=PIPE, stderr=PIPE)
-                process.communicate()
-                if process.returncode == 99:
-                    print("Poppler installation found successfully!")
+                try:
+                    process = Popen([poppler_exe], stdout=PIPE, stderr=PIPE)
+                    process.communicate()
+                    if process.returncode == 99:
+                        print("Poppler installation found successfully!")
                         return True
                     raise PopplerNotFoundError(f"Poppler exists but returned unexpected code: {process.returncode}")
-            except Exception as e:
+                except Exception as e:
                     raise PopplerNotFoundError(f"Error running Poppler: {str(e)}")
-        else:
-            # On Linux/macOS, assume poppler-utils is installed via apt-get or package manager
-            poppler_exe = shutil.which("pdfinfo")
-            if not poppler_exe:
+            else:
+                # On Linux/macOS, assume poppler-utils is installed via apt-get or package manager
+                poppler_exe = shutil.which("pdfinfo")
+                if not poppler_exe:
                     raise PopplerNotFoundError("Poppler not found in PATH")
                 
-            try:
-                # Running with the '-v' flag should output version info and return 0 on success.
-                process = Popen([poppler_exe, "-v"], stdout=PIPE, stderr=PIPE)
-                stdout, stderr = process.communicate()
-                if process.returncode == 0:
-                    print("Poppler installation found successfully!")
+                try:
+                    # Running with the '-v' flag should output version info and return 0 on success.
+                    process = Popen([poppler_exe, "-v"], stdout=PIPE, stderr=PIPE)
+                    stdout, stderr = process.communicate()
+                    if process.returncode == 0:
+                        print("Poppler installation found successfully!")
                         return True
                     raise PopplerNotFoundError(f"Poppler exists but returned unexpected code: {process.returncode}")
                 except Exception as e:
@@ -54,7 +63,7 @@ class PopplerUtils:
         except PopplerNotFoundError:
             # Re-raise PopplerNotFoundError without modification
             raise
-            except Exception as e:
+        except Exception as e:
             # Catch any other unexpected errors
             raise PopplerNotFoundError(f"Unexpected error checking Poppler: {str(e)}")
 

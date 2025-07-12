@@ -27,12 +27,12 @@ class PDFProcessor:
     def process_first_pdf(self):
         """Process the first PDF found in the directory."""
         try:
-        pdf_files = [f for f in os.listdir(self.session_dir) if f.lower().endswith('.pdf')]
-        if not pdf_files:
+            pdf_files = [f for f in os.listdir(self.session_dir) if f.lower().endswith('.pdf')]
+            if not pdf_files:
                 print("❌ No PDF files found in the session directory")
-            return False
+                return False
 
-        pdf_path = os.path.join(self.session_dir, pdf_files[0])
+            pdf_path = os.path.join(self.session_dir, pdf_files[0])
             print(f"📄 Processing PDF: {pdf_path}")
         
             # Extract text using pdfplumber (always available)
@@ -41,15 +41,15 @@ class PDFProcessor:
             if success:
                 print(f"✅ PDF processed successfully: {pdf_files[0]}")
             
-            # Clean up the PDF file after processing
+                # Clean up the PDF file after processing
                 try:
-            os.remove(pdf_path)
+                    os.remove(pdf_path)
                     print(f"🗑️ Removed processed PDF: {pdf_files[0]}")
                 except Exception as cleanup_error:
                     print(f"⚠️ Warning: Could not remove PDF file: {str(cleanup_error)}")
             
-            # Force garbage collection
-            gc.collect()
+                # Force garbage collection
+                gc.collect()
             
                 return True
             else:
@@ -75,27 +75,27 @@ class PDFProcessor:
                 
                 for i, page in enumerate(pdf.pages):
                     try:
-                    # Process one page at a time
-                    text = page.extract_text()
+                        # Process one page at a time
+                        text = page.extract_text()
                         
                         if not text or text.strip() == "":
                             print(f"⚠️ Page {i+1} has no extractable text")
                             text = f"[Page {i+1} - No text content found]"
                         
-                    text_path = os.path.join(self.session_dir, f"{i+1}.txt")
+                        text_path = os.path.join(self.session_dir, f"{i+1}.txt")
                     
-                    with open(text_path, 'w', encoding='utf-8') as text_file:
-                        text_file.write(text)
+                        with open(text_path, 'w', encoding='utf-8') as text_file:
+                            text_file.write(text)
                         
                         print(f"✅ Saved text from page {i+1} to {os.path.basename(text_path)}")
                     
-                    # Clear page from memory
+                        # Clear page from memory
                         if hasattr(page, 'flush_cache'):
-                    page.flush_cache()
+                            page.flush_cache()
                     
-                    # Force garbage collection every few pages
-                    if i % 5 == 0:
-                        gc.collect()
+                        # Force garbage collection every few pages
+                        if i % 5 == 0:
+                            gc.collect()
                         
                     except Exception as page_error:
                         print(f"⚠️ Error processing page {i+1}: {str(page_error)}")
@@ -140,4 +140,4 @@ class PDFProcessor:
 
 if __name__ == "__main__":
     processor = PDFProcessor(".")  # Use current directory for CLI usage
-    processor.process_first_pdf() 
+    processor.process_first_pdf()
