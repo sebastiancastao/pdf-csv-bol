@@ -338,7 +338,7 @@ def get_or_create_session():
     if force_new_session:
         processor = DataProcessor()  # Creates new session
         print(f"🆕 Force creating new session due to _action=new_session: {processor.session_id}")
-                return processor
+        return processor
     
     # **CRITICAL FIX**: For external sessions, always use the provided ID without reuse logic
     if external_session_id:
