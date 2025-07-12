@@ -457,35 +457,35 @@ def upload_file():
         print(f"❌ Invalid file type: {file.filename}")
         return jsonify({'error': 'Invalid file type (PDF required)'}), 400
         
-            try:
-            # **SESSION CONTAMINATION DETECTION**: Check for existing files before processing
-            existing_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
-            if existing_files:
-                print(f"⚠️  SESSION CONTAMINATION DETECTED!")
-                print(f"⚠️  Session {processor.session_id} contains existing files: {existing_files}")
-                print(f"⚠️  This may cause same output for different inputs!")
-                
-                # Clean up existing files to prevent contamination
-                for file in existing_files:
-                    file_path = os.path.join(processor.session_dir, file)
-                    try:
-                        os.remove(file_path)
-                        print(f"🧹 Removed old file: {file}")
-                    except Exception as e:
-                        print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
+    try:
+        # **SESSION CONTAMINATION DETECTION**: Check for existing files before processing
+        existing_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
+        if existing_files:
+            print(f"⚠️  SESSION CONTAMINATION DETECTED!")
+            print(f"⚠️  Session {processor.session_id} contains existing files: {existing_files}")
+            print(f"⚠️  This may cause same output for different inputs!")
             
-            # Save the uploaded PDF directly to session directory
-            filename = secure_filename(file.filename)
-            file_path = os.path.join(processor.session_dir, filename)
-            file.save(file_path)
-            
-            print(f"📏 Saved PDF size: {os.path.getsize(file_path)} bytes")
-            print(f"📄 PDF saved to: {file_path}")
-            print(f"📁 Session directory: {processor.session_dir}")
-            
-            # Process the PDF through our pipeline
-            print("🔄 Initializing PDF processor...")
-            pdf_processor = PDFProcessor(session_dir=processor.session_dir)
+            # Clean up existing files to prevent contamination
+            for file in existing_files:
+                file_path = os.path.join(processor.session_dir, file)
+                try:
+                    os.remove(file_path)
+                    print(f"🧹 Removed old file: {file}")
+                except Exception as e:
+                    print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
+        
+        # Save the uploaded PDF directly to session directory
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(processor.session_dir, filename)
+        file.save(file_path)
+        
+        print(f"📏 Saved PDF size: {os.path.getsize(file_path)} bytes")
+        print(f"📄 PDF saved to: {file_path}")
+        print(f"📁 Session directory: {processor.session_dir}")
+        
+        # Process the PDF through our pipeline
+        print("🔄 Initializing PDF processor...")
+        pdf_processor = PDFProcessor(session_dir=processor.session_dir)
         
         print("🔄 Processing PDF...")
         if not pdf_processor.process_first_pdf():
