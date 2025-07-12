@@ -340,24 +340,35 @@ def get_or_create_session():
         print(f"🆕 Force creating new session due to _action=new_session: {processor.session_id}")
         return processor
     
-    # **CRITICAL FIX**: For external sessions, always use the provided ID without reuse logic
+    # **ENHANCED EXTERNAL SESSION HANDLING**
     if external_session_id:
         # Always create/use the exact session ID provided by external apps
         session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', external_session_id)
         
-        # **SESSION CONTAMINATION FIX**: Check if session has old data and warn about it
+        # **AUTOMATIC CONTAMINATION DETECTION FOR EXTERNAL SESSIONS**
+        contamination_detected = False
         if os.path.exists(session_dir):
             old_files = [f for f in os.listdir(session_dir) if not f.startswith('.')]
             if old_files:
-                print(f"⚠️  WARNING: External session {external_session_id} contains old files: {old_files}")
-                print(f"⚠️  This may cause session contamination - same output for different inputs!")
-                print(f"⚠️  External app should call /clear-session before processing new documents")
+                contamination_detected = True
+                print(f"⚠️ CONTAMINATION DETECTED in external session {external_session_id}")
+                print(f"⚠️ Found {len(old_files)} existing files: {old_files}")
+                
+                # **SMART CONTAMINATION HANDLING**
+                # Only warn if it's not a fresh PDF upload (which will clean anyway)
+                request_path = request.path
+                if request_path not in ['/upload', '/upload-base64', '/upload-attachment']:
+                    print(f"⚠️ Session contamination may affect this request: {request_path}")
+                    print(f"⚠️ External app should call /clear-session before processing new documents")
         
         # Create processor with the specified session ID (creates directory if needed)
         processor = DataProcessor(session_id=external_session_id)
         
         if os.path.exists(session_dir):
-            print(f"🔄 Using external session: {external_session_id} (directory exists)")
+            status = "🔄 Using external session"
+            if contamination_detected:
+                status += " (⚠️ contamination detected)"
+            print(f"{status}: {external_session_id}")
         else:
             print(f"🆕 Creating new external session: {external_session_id}")
         
@@ -458,21 +469,38 @@ def upload_file():
         return jsonify({'error': 'Invalid file type (PDF required)'}), 400
         
     try:
-        # **SESSION CONTAMINATION DETECTION**: Check for existing files before processing
-        existing_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
-        if existing_files:
-            print(f"⚠️  SESSION CONTAMINATION DETECTED!")
-            print(f"⚠️  Session {processor.session_id} contains existing files: {existing_files}")
-            print(f"⚠️  This may cause same output for different inputs!")
-            
-            # Clean up existing files to prevent contamination
-            for file in existing_files:
-                file_path = os.path.join(processor.session_dir, file)
-                try:
-                    os.remove(file_path)
-                    print(f"🧹 Removed old file: {file}")
-                except Exception as e:
-                    print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
+        # **AUTOMATIC SESSION CLEANUP FOR PDF UPLOADS**
+        # When a new PDF is uploaded, we should start fresh to avoid contamination
+        external_session_id = request.args.get('_sid') or request.args.get('session_id')
+        
+        if external_session_id:
+            # For external sessions, always clean before processing new PDF
+            print(f"🧹 EXTERNAL SESSION: Cleaning session before PDF processing")
+            existing_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
+            if existing_files:
+                print(f"🧹 Removing {len(existing_files)} existing files to prevent contamination")
+                for old_file in existing_files:
+                    try:
+                        os.remove(os.path.join(processor.session_dir, old_file))
+                        print(f"🧹 Removed: {old_file}")
+                    except Exception as e:
+                        print(f"⚠️ Warning: Could not remove {old_file}: {str(e)}")
+            else:
+                print(f"✅ Session directory is already clean")
+        else:
+            # For internal sessions, check for contamination and warn
+            existing_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
+            if existing_files:
+                print(f"⚠️ SESSION CONTAMINATION DETECTED in internal session!")
+                print(f"⚠️ Session {processor.session_id} contains existing files: {existing_files}")
+                
+                # Clean up existing files to prevent contamination
+                for old_file in existing_files:
+                    try:
+                        os.remove(os.path.join(processor.session_dir, old_file))
+                        print(f"🧹 Removed old file: {old_file}")
+                    except Exception as e:
+                        print(f"⚠️ Warning: Could not remove {old_file}: {str(e)}")
         
         # Save the uploaded PDF directly to session directory
         filename = secure_filename(file.filename)
@@ -520,7 +548,9 @@ def upload_file():
         return jsonify({
             'message': 'PDF processed successfully',
             'filename': filename,
-            'session_id': processor.session_id
+            'session_id': processor.session_id,
+            'session_cleaned': True,
+            'ready_for_csv': True
         }), 200
         
     except Exception as e:
@@ -765,6 +795,37 @@ def upload_csv():
         print(f"Form data: {list(request.form.keys())}")
         print(f"JSON data: {request.is_json}")
         
+        # **CSV UPLOAD VALIDATION**
+        # Check if there's processed PDF data to merge with
+        combined_csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
+        pdf_data_exists = os.path.exists(combined_csv_path)
+        
+        if not pdf_data_exists:
+            print("⚠️ No PDF data found - CSV upload requires processed PDF data first")
+            return jsonify({
+                'error': 'No PDF data found',
+                'message': 'Please upload and process a PDF file before uploading CSV data',
+                'session_id': processor.session_id,
+                'requires_pdf_first': True
+            }), 400
+        
+        # Check session contamination risk
+        session_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
+        external_session_id = request.args.get('_sid') or request.args.get('session_id')
+        
+        validation_info = {
+            'session_type': 'external' if external_session_id else 'internal',
+            'session_files': session_files,
+            'has_pdf_data': pdf_data_exists,
+            'contamination_risk': 'low'
+        }
+        
+        # Check for signs of contamination
+        if len(session_files) > 5:  # More files than expected
+            validation_info['contamination_risk'] = 'medium'
+        
+        print(f"📊 CSV Upload Session Validation: {validation_info}")
+        
         file_path = None
         
         try:
@@ -859,16 +920,23 @@ def upload_csv():
                 success, message = process_csv_file(file_path, processor.session_dir)
                 
                 if not success:
-                    return jsonify({'error': message}), 400
+                    return jsonify({
+                        'error': message,
+                        'session_validation': validation_info
+                    }), 400
                     
                 return jsonify({
                     'message': 'CSV data mapped successfully',
                     'status': 'success',
-                    'session_id': processor.session_id
+                    'session_id': processor.session_id,
+                    'session_validation': validation_info
                 }), 200
             else:
-                return jsonify({'error': 'Failed to save CSV data'}), 500
-                
+                return jsonify({
+                    'error': 'Failed to save CSV data',
+                    'session_validation': validation_info
+                }), 500
+            
         finally:
             # Clean up temporary file
             if file_path and os.path.exists(file_path):
@@ -1435,100 +1503,135 @@ def api_docs():
         'service': 'BOL Extractor API',
         'version': '1.0.0',
         'description': 'API for processing BOL (Bill of Lading) PDF files and CSV data',
-        'processing_modes': {
-            'stateless': {
-                'description': 'Recommended for automated systems - no session management required',
-                'benefits': ['No session contamination', 'Automatic cleanup', 'Simpler integration', 'Better reliability'],
-                'endpoints': ['/upload-stateless', '/upload-stateless-multipart']
+        'automated_workflow_best_practices': {
+            'recommended_workflow': [
+                'POST /auto-clean-session?_sid=your_session_id (ensure clean start)',
+                'POST /upload?_sid=your_session_id (upload PDF)',
+                'POST /upload-csv?_sid=your_session_id (upload CSV)',
+                'GET /download?_sid=your_session_id (download results)',
+                'POST /clear-session?_sid=your_session_id (cleanup)'
+            ],
+            'contamination_prevention': {
+                'always_clean_first': 'Use /auto-clean-session before processing new documents',
+                'unique_session_ids': 'Use unique session IDs for each processing workflow',
+                'proper_cleanup': 'Always clean up sessions after completion'
             },
-            'stateful': {
-                'description': 'Traditional session-based processing - good for web UI',
-                'benefits': ['Multi-step workflows', 'Resume capability', 'File persistence'],
-                'endpoints': ['/upload', '/upload-csv', '/download', '/clear-session', '/new-session']
+            'session_management': {
+                'external_sessions': 'Use ?_sid=unique_id for external applications',
+                'automatic_cleanup': 'PDF upload automatically cleans contaminated sessions',
+                'validation': 'Use /validate-session to check session state'
             }
         },
         'endpoints': {
-            'POST /upload-stateless': {
-                'description': 'RECOMMENDED: Single-request PDF processing with optional CSV merge',
-                'parameters': {
-                    'file': 'PDF file (multipart/form-data)',
-                    'csv_file': 'Optional CSV file for merging (multipart/form-data)'
-                },
-                'response': {
-                    'status': 'success',
-                    'csv_data': 'Processed CSV content',
-                    'row_count': 'Number of data rows',
-                    'request_id': 'Unique request identifier'
-                },
-                'benefits': ['No session management', 'Automatic cleanup', 'Single request', 'No contamination risk']
-            },
-            'POST /upload-stateless-multipart': {
-                'description': 'RECOMMENDED: Stateless processing with separate PDF and CSV files',
-                'parameters': {
-                    'pdf_file': 'PDF file (multipart/form-data)',
-                    'csv_file': 'Optional CSV file for merging (multipart/form-data)'
-                },
-                'response': 'Same as /upload-stateless',
-                'benefits': ['Clear separation of PDF and CSV', 'No session management', 'Automatic cleanup']
-            },
             'GET /': {
                 'description': 'Main application page',
                 'response': 'HTML page'
             },
             'POST /upload': {
-                'description': 'Session-based PDF processing (legacy)',
+                'description': 'Upload and process a PDF file (automatically cleans contaminated sessions)',
                 'parameters': {
                     'file': 'PDF file (multipart/form-data)',
-                    '_sid': 'Optional session ID for external apps'
+                    '_sid': 'Session ID for external applications (optional)'
                 },
-                'response': 'Processing result',
-                'note': 'Requires session management - use stateless endpoints instead'
+                'response': 'Processing result with session cleanup status'
             },
             'POST /upload-csv': {
-                'description': 'Session-based CSV merge (legacy)',
+                'description': 'Upload and merge CSV/Excel data (validates session state)',
                 'parameters': {
                     'file': 'CSV/Excel file (multipart/form-data)',
-                    '_sid': 'Optional session ID for external apps'
+                    '_sid': 'Session ID for external applications (optional)'
                 },
-                'response': 'Merge result',
-                'note': 'Requires session management - use stateless endpoints instead'
+                'response': 'Merge result with session validation info'
+            },
+            'POST /upload-base64': {
+                'description': 'Upload and process base64 encoded PDF file',
+                'parameters': {
+                    'file_data': 'Base64 encoded file data (JSON)',
+                    'filename': 'Optional filename (JSON)',
+                    '_sid': 'Session ID for external applications (optional)'
+                },
+                'response': 'Processing result'
+            },
+            'POST /upload-attachment': {
+                'description': 'Upload and process attachment data (flexible format)',
+                'parameters': {
+                    'attachmentData': 'Attachment data (base64 or bytes)',
+                    'filename': 'Optional filename',
+                    '_sid': 'Session ID for external applications (optional)'
+                },
+                'response': 'Processing result'
+            },
+            'POST /auto-clean-session': {
+                'description': 'Automatically detect and clean contaminated sessions',
+                'parameters': {
+                    '_sid': 'Session ID to clean (required)'
+                },
+                'response': 'Cleanup result and contamination status',
+                'note': 'Recommended for automated workflows before processing'
             },
             'GET /download': {
-                'description': 'Download processed CSV file (session-based)',
+                'description': 'Download processed CSV file',
+                'parameters': {
+                    '_sid': 'Session ID for external applications (optional)'
+                },
                 'response': 'CSV file download'
             },
             'GET /download-bol': {
-                'description': 'Download processed BOL CSV file (session-based)',
+                'description': 'Download processed BOL CSV file',
+                'parameters': {
+                    '_sid': 'Session ID for external applications (optional)'
+                },
                 'response': 'CSV file download'
             },
-            'POST /clear-session': {
-                'description': 'Clear session data (session-based)',
+            'GET /download-bol/<filename>': {
+                'description': 'Download specific file by name',
                 'parameters': {
-                    '_sid': 'Session ID to clear'
+                    'filename': 'Name of file to download',
+                    '_sid': 'Session ID for external applications (optional)'
                 },
-                'response': 'Session clearing result'
-            },
-            'POST /new-session': {
-                'description': 'Create new session (session-based)',
-                'parameters': {
-                    '_sid': 'Optional specific session ID'
-                },
-                'response': 'New session information'
-            },
-            'GET /validate-session': {
-                'description': 'Check session contamination (session-based)',
-                'parameters': {
-                    '_sid': 'Session ID to validate'
-                },
-                'response': 'Session validation results'
+                'response': 'File download'
             },
             'GET /status': {
-                'description': 'Get processing status (session-based)',
+                'description': 'Get current processing status',
+                'parameters': {
+                    '_sid': 'Session ID for external applications (optional)'
+                },
                 'response': 'Status information'
             },
             'GET /files': {
-                'description': 'List available files (session-based)',
+                'description': 'List available files in current session',
+                'parameters': {
+                    '_sid': 'Session ID for external applications (optional)'
+                },
                 'response': 'List of available files'
+            },
+            'POST /process-workflow': {
+                'description': 'Process complete workflow',
+                'parameters': {
+                    '_sid': 'Session ID for external applications (optional)'
+                },
+                'response': 'Workflow processing result'
+            },
+            'POST /clear-session': {
+                'description': 'Clear current session and start fresh',
+                'parameters': {
+                    '_sid': 'Session ID for external applications (optional)'
+                },
+                'response': 'Session clearing result'
+            },
+            'GET|POST /new-session': {
+                'description': 'Create a new session explicitly',
+                'parameters': {
+                    '_sid': 'Session ID for external applications (optional)'
+                },
+                'response': 'New session creation result'
+            },
+            'GET /validate-session': {
+                'description': 'Validate session state and detect contamination',
+                'parameters': {
+                    '_sid': 'Session ID to validate (required)'
+                },
+                'response': 'Session validation results and recommendations'
             },
             'GET /ping': {
                 'description': 'Simple ping to check service availability',
@@ -1537,22 +1640,10 @@ def api_docs():
             'GET /health': {
                 'description': 'Health check endpoint',
                 'response': 'Health status'
-            }
-        },
-        'migration_guide': {
-            'from_sessions_to_stateless': {
-                'old_workflow': [
-                    'POST /clear-session?_sid=abc123',
-                    'POST /new-session?_sid=abc123',
-                    'POST /upload?_sid=abc123',
-                    'POST /upload-csv?_sid=abc123',
-                    'GET /download?_sid=abc123',
-                    'POST /clear-session?_sid=abc123'
-                ],
-                'new_workflow': [
-                    'POST /upload-stateless-multipart (with both PDF and CSV files)'
-                ],
-                'benefits': ['6 requests → 1 request', 'No session management', 'No contamination risk', 'Automatic cleanup']
+            },
+            'GET /api/health': {
+                'description': 'API health check endpoint',
+                'response': 'API health status'
             }
         },
         'cors': {
@@ -1657,6 +1748,77 @@ def validate_session():
             'message': 'Session validation failed'
         }), 500
 
+@app.route('/auto-clean-session', methods=['POST'])
+def auto_clean_session():
+    """Automatically detect and clean contaminated sessions for automated workflows."""
+    try:
+        # Get external session ID
+        external_session_id = request.args.get('_sid') or request.args.get('session_id')
+        
+        if not external_session_id:
+            return jsonify({
+                'status': 'error',
+                'error': 'No session ID provided',
+                'message': 'Please provide session ID via ?_sid=your_session_id'
+            }), 400
+        
+        # Check session directory
+        session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', external_session_id)
+        
+        result = {
+            'session_id': external_session_id,
+            'session_dir': session_dir,
+            'directory_exists': os.path.exists(session_dir),
+            'contamination_detected': False,
+            'files_removed': [],
+            'cleanup_performed': False,
+            'status': 'clean'
+        }
+        
+        if os.path.exists(session_dir):
+            # Check for contamination
+            existing_files = [f for f in os.listdir(session_dir) if not f.startswith('.')]
+            
+            if existing_files:
+                result['contamination_detected'] = True
+                result['files_found'] = existing_files
+                result['status'] = 'contaminated'
+                
+                print(f"🧹 AUTO-CLEAN: Contamination detected in session {external_session_id}")
+                print(f"🧹 Found {len(existing_files)} files to remove: {existing_files}")
+                
+                # Clean up all files
+                for file in existing_files:
+                    file_path = os.path.join(session_dir, file)
+                    try:
+                        os.remove(file_path)
+                        result['files_removed'].append(file)
+                        print(f"🧹 Removed: {file}")
+                    except Exception as e:
+                        print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
+                        result['errors'] = result.get('errors', [])
+                        result['errors'].append(f"Could not remove {file}: {str(e)}")
+                
+                result['cleanup_performed'] = True
+                result['status'] = 'cleaned'
+                
+                print(f"✅ AUTO-CLEAN: Session {external_session_id} cleaned successfully")
+            else:
+                result['status'] = 'already_clean'
+                print(f"✅ AUTO-CLEAN: Session {external_session_id} is already clean")
+        else:
+            result['status'] = 'no_directory'
+            print(f"ℹ️ AUTO-CLEAN: Session directory {external_session_id} does not exist")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'message': 'Auto-clean session failed'
+        }), 500
+
 @app.before_request
 def handle_preflight():
     """Handle CORS preflight requests."""
@@ -1697,375 +1859,6 @@ def after_request(response):
     response.headers['X-Frame-Options'] = 'ALLOWALL'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
-
-@app.route('/upload-stateless', methods=['POST'])
-def upload_stateless():
-    """Stateless PDF processing - no session management required."""
-    import uuid
-    import tempfile
-    import shutil
-    
-    # Generate unique request ID for this processing
-    request_id = str(uuid.uuid4())[:8]
-    temp_dir = None
-    
-    try:
-        print(f"📤 Stateless PDF Upload - Request ID: {request_id}")
-        
-        # Create temporary directory for this request
-        temp_dir = tempfile.mkdtemp(prefix=f"bol_processing_{request_id}_")
-        print(f"📁 Created temporary directory: {temp_dir}")
-        
-        # Handle PDF upload
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file part in request'}), 400
-            
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
-            
-        if not allowed_file(file.filename, ALLOWED_PDF_EXTENSIONS):
-            return jsonify({'error': 'Invalid file type (PDF required)'}), 400
-        
-        # Save PDF to temporary directory
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(temp_dir, filename)
-        file.save(file_path)
-        
-        print(f"📄 PDF saved to: {file_path} ({os.path.getsize(file_path)} bytes)")
-        
-        # Process PDF through pipeline
-        print("🔄 Processing PDF...")
-        pdf_processor = PDFProcessor(session_dir=temp_dir)
-        
-        if not pdf_processor.process_first_pdf():
-            return jsonify({
-                'error': 'PDF processing failed',
-                'request_id': request_id
-            }), 500
-        
-        print("🔄 Processing extracted text...")
-        data_processor = DataProcessor(session_id=os.path.basename(temp_dir))
-        data_processor.session_dir = temp_dir
-        
-        if not data_processor.process_all_files():
-            return jsonify({
-                'error': 'Text processing failed',
-                'request_id': request_id
-            }), 500
-        
-        print("🔄 Creating CSV...")
-        csv_exporter = CSVExporter(session_dir=temp_dir)
-        if not csv_exporter.combine_to_csv():
-            return jsonify({
-                'error': 'CSV creation failed',
-                'request_id': request_id
-            }), 500
-        
-        # Check if CSV merge is also requested
-        csv_file = request.files.get('csv_file')
-        if csv_file and csv_file.filename:
-            print("🔄 Processing additional CSV data...")
-            csv_temp_path = os.path.join(temp_dir, f"temp_{secure_filename(csv_file.filename)}")
-            csv_file.save(csv_temp_path)
-            
-            success, message = process_csv_file(csv_temp_path, temp_dir)
-            if not success:
-                return jsonify({'error': f'CSV processing failed: {message}'}), 400
-        
-        # Return processed CSV data
-        csv_path = os.path.join(temp_dir, OUTPUT_CSV_NAME)
-        if os.path.exists(csv_path):
-            # Read CSV content to return
-            with open(csv_path, 'r', encoding='utf-8') as f:
-                csv_content = f.read()
-            
-            # Count rows
-            row_count = len(csv_content.splitlines()) - 1  # Exclude header
-            
-            print(f"✅ Stateless processing completed - {row_count} rows")
-            
-            return jsonify({
-                'status': 'success',
-                'message': 'PDF processed successfully',
-                'request_id': request_id,
-                'csv_data': csv_content,
-                'row_count': row_count,
-                'filename': OUTPUT_CSV_NAME
-            }), 200
-        else:
-            return jsonify({'error': 'No output file generated'}), 500
-            
-    except Exception as e:
-        print(f"❌ Stateless processing error: {str(e)}")
-        return jsonify({
-            'error': 'Processing failed',
-            'details': str(e),
-            'request_id': request_id
-        }), 500
-        
-    finally:
-        # Always cleanup temporary directory
-        if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-                print(f"🧹 Cleaned up temporary directory: {temp_dir}")
-            except Exception as e:
-                print(f"⚠️ Warning: Could not clean up temp directory: {str(e)}")
-
-@app.route('/upload-stateless-multipart', methods=['POST'])
-def upload_stateless_multipart():
-    """Stateless processing with separate PDF and CSV uploads."""
-    import uuid
-    import tempfile
-    import shutil
-    
-    # Generate unique request ID
-    request_id = str(uuid.uuid4())[:8]
-    temp_dir = None
-    
-    try:
-        print(f"📤 Stateless Multipart Upload - Request ID: {request_id}")
-        
-        # Create temporary directory
-        temp_dir = tempfile.mkdtemp(prefix=f"bol_processing_{request_id}_")
-        print(f"📁 Created temporary directory: {temp_dir}")
-        
-        # Handle PDF file
-        pdf_file = request.files.get('pdf_file')
-        if not pdf_file or pdf_file.filename == '':
-            return jsonify({'error': 'No PDF file provided'}), 400
-            
-        if not allowed_file(pdf_file.filename, ALLOWED_PDF_EXTENSIONS):
-            return jsonify({'error': 'Invalid PDF file type'}), 400
-        
-        # Save and process PDF
-        pdf_filename = secure_filename(pdf_file.filename)
-        pdf_path = os.path.join(temp_dir, pdf_filename)
-        pdf_file.save(pdf_path)
-        
-        print(f"📄 PDF saved: {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
-        
-        # Process PDF
-        pdf_processor = PDFProcessor(session_dir=temp_dir)
-        if not pdf_processor.process_first_pdf():
-            return jsonify({'error': 'PDF processing failed', 'request_id': request_id}), 500
-        
-        # Process extracted text
-        data_processor = DataProcessor(session_id=os.path.basename(temp_dir))
-        data_processor.session_dir = temp_dir
-        if not data_processor.process_all_files():
-            return jsonify({'error': 'Text processing failed', 'request_id': request_id}), 500
-        
-        # Create initial CSV
-        csv_exporter = CSVExporter(session_dir=temp_dir)
-        if not csv_exporter.combine_to_csv():
-            return jsonify({'error': 'CSV creation failed', 'request_id': request_id}), 500
-        
-        # Handle optional CSV file for merging
-        csv_file = request.files.get('csv_file')
-        if csv_file and csv_file.filename:
-            if not allowed_file(csv_file.filename, ALLOWED_CSV_EXTENSIONS):
-                return jsonify({'error': 'Invalid CSV file type'}), 400
-            
-            csv_temp_path = os.path.join(temp_dir, f"temp_{secure_filename(csv_file.filename)}")
-            csv_file.save(csv_temp_path)
-            
-            success, message = process_csv_file(csv_temp_path, temp_dir)
-            if not success:
-                return jsonify({'error': f'CSV merge failed: {message}', 'request_id': request_id}), 400
-        
-        # Return result
-        result_path = os.path.join(temp_dir, OUTPUT_CSV_NAME)
-        if os.path.exists(result_path):
-            with open(result_path, 'r', encoding='utf-8') as f:
-                csv_content = f.read()
-            
-            row_count = len(csv_content.splitlines()) - 1
-            
-            return jsonify({
-                'status': 'success',
-                'message': 'Processing completed successfully',
-                'request_id': request_id,
-                'csv_data': csv_content,
-                'row_count': row_count,
-                'has_csv_merge': bool(csv_file and csv_file.filename)
-            }), 200
-        else:
-            return jsonify({'error': 'No output generated', 'request_id': request_id}), 500
-            
-    except Exception as e:
-        print(f"❌ Stateless multipart error: {str(e)}")
-        return jsonify({
-            'error': 'Processing failed',
-            'details': str(e),
-            'request_id': request_id
-        }), 500
-        
-    finally:
-        # Cleanup
-        if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-                print(f"🧹 Cleaned up: {temp_dir}")
-            except Exception as e:
-                print(f"⚠️ Cleanup warning: {str(e)}")
-
-@app.route('/example-stateless')
-def example_stateless():
-    """Show example of how to use stateless processing."""
-    return jsonify({
-        'title': 'Stateless Processing Example',
-        'description': 'How to migrate from session-based to stateless processing',
-        'old_way_problems': [
-            'Session contamination (same output for different inputs)',
-            'Complex cleanup logic required',
-            'Multiple requests needed',
-            'Error-prone session management'
-        ],
-        'new_way_benefits': [
-            'Single request processing',
-            'No session management',
-            'Automatic cleanup',
-            'No contamination risk',
-            'Simpler error handling'
-        ],
-        'javascript_example': {
-            'old_session_based': '''
-// OLD WAY - Session-based (6 requests, complex cleanup)
-const sessionId = 'session_' + Date.now();
-
-// 1. Clear any existing session
-await fetch(`${API_URL}/clear-session?_sid=${sessionId}`, { method: 'POST' });
-
-// 2. Create new session
-await fetch(`${API_URL}/new-session?_sid=${sessionId}`, { method: 'POST' });
-
-// 3. Upload PDF
-const pdfForm = new FormData();
-pdfForm.append('file', pdfFile);
-await fetch(`${API_URL}/upload?_sid=${sessionId}`, { method: 'POST', body: pdfForm });
-
-// 4. Upload CSV
-const csvForm = new FormData();
-csvForm.append('file', csvFile);
-await fetch(`${API_URL}/upload-csv?_sid=${sessionId}`, { method: 'POST', body: csvForm });
-
-// 5. Download result
-const result = await fetch(`${API_URL}/download?_sid=${sessionId}`);
-const csvData = await result.text();
-
-// 6. Cleanup session
-await fetch(`${API_URL}/clear-session?_sid=${sessionId}`, { method: 'POST' });
-            ''',
-            'new_stateless': '''
-// NEW WAY - Stateless (1 request, automatic cleanup)
-const form = new FormData();
-form.append('pdf_file', pdfFile);
-form.append('csv_file', csvFile);  // Optional
-
-const response = await fetch(`${API_URL}/upload-stateless-multipart`, {
-    method: 'POST',
-    body: form
-});
-
-const result = await response.json();
-if (result.status === 'success') {
-    const csvData = result.csv_data;
-    const rowCount = result.row_count;
-    // Process your CSV data here
-}
-            '''
-        },
-        'python_example': {
-            'old_session_based': '''
-# OLD WAY - Session-based (6 requests, complex cleanup)
-import requests
-import time
-
-API_URL = "https://your-api.com"
-session_id = f"session_{int(time.time())}"
-
-# 1. Clear session
-requests.post(f"{API_URL}/clear-session?_sid={session_id}")
-
-# 2. Create new session
-requests.post(f"{API_URL}/new-session?_sid={session_id}")
-
-# 3. Upload PDF
-with open('document.pdf', 'rb') as f:
-    requests.post(f"{API_URL}/upload?_sid={session_id}", files={'file': f})
-
-# 4. Upload CSV
-with open('data.csv', 'rb') as f:
-    requests.post(f"{API_URL}/upload-csv?_sid={session_id}", files={'file': f})
-
-# 5. Download result
-response = requests.get(f"{API_URL}/download?_sid={session_id}")
-csv_data = response.text
-
-# 6. Cleanup
-requests.post(f"{API_URL}/clear-session?_sid={session_id}")
-            ''',
-            'new_stateless': '''
-# NEW WAY - Stateless (1 request, automatic cleanup)
-import requests
-
-API_URL = "https://your-api.com"
-
-# Single request with both files
-files = {
-    'pdf_file': ('document.pdf', open('document.pdf', 'rb')),
-    'csv_file': ('data.csv', open('data.csv', 'rb'))  # Optional
-}
-
-response = requests.post(f"{API_URL}/upload-stateless-multipart", files=files)
-result = response.json()
-
-if result['status'] == 'success':
-    csv_data = result['csv_data']
-    row_count = result['row_count']
-    # Process your CSV data here
-            '''
-        },
-        'curl_example': {
-            'old_session_based': '''
-# OLD WAY - Session-based (6 requests)
-SESSION_ID="session_$(date +%s)"
-
-# 1. Clear session
-curl -X POST "https://your-api.com/clear-session?_sid=$SESSION_ID"
-
-# 2. Create session
-curl -X POST "https://your-api.com/new-session?_sid=$SESSION_ID"
-
-# 3. Upload PDF
-curl -X POST "https://your-api.com/upload?_sid=$SESSION_ID" -F "file=@document.pdf"
-
-# 4. Upload CSV
-curl -X POST "https://your-api.com/upload-csv?_sid=$SESSION_ID" -F "file=@data.csv"
-
-# 5. Download result
-curl "https://your-api.com/download?_sid=$SESSION_ID" -o result.csv
-
-# 6. Cleanup
-curl -X POST "https://your-api.com/clear-session?_sid=$SESSION_ID"
-            ''',
-            'new_stateless': '''
-# NEW WAY - Stateless (1 request)
-curl -X POST "https://your-api.com/upload-stateless-multipart" \\
-  -F "pdf_file=@document.pdf" \\
-  -F "csv_file=@data.csv"
-            '''
-        },
-        'migration_benefits': {
-            'reliability': 'No session contamination issues',
-            'simplicity': '6 requests reduced to 1 request',
-            'performance': 'Faster processing, no session overhead',
-            'maintenance': 'No session cleanup logic needed',
-            'debugging': 'Each request is independent and traceable'
-        }
-    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
