@@ -325,6 +325,40 @@ def cleanup_old_files():
     except Exception as e:
         print(f"Error during cleanup: {str(e)}")
 
+def log_session_files(session_dir, context="", session_id="unknown"):
+    """Log all files currently in a session directory for debugging."""
+    try:
+        if not os.path.exists(session_dir):
+            print(f"📁 {context} Session {session_id}: Directory does not exist yet")
+            return []
+        
+        all_files = [f for f in os.listdir(session_dir) if not f.startswith('.')]
+        
+        if not all_files:
+            print(f"📁 {context} Session {session_id}: Directory is empty")
+            return []
+        
+        print(f"📁 {context} Session {session_id}: Found {len(all_files)} files:")
+        for file in all_files:
+            file_path = os.path.join(session_dir, file)
+            file_size = os.path.getsize(file_path)
+            file_type = "PDF" if file.lower().endswith('.pdf') else "CSV" if file.lower().endswith('.csv') else "TXT" if file.lower().endswith('.txt') else "OTHER"
+            print(f"  📄 {file} ({file_type}, {file_size} bytes)")
+        
+        return all_files
+    except Exception as e:
+        print(f"❌ Error logging session files: {str(e)}")
+        return []
+
+def track_file_operation(operation, filename, session_dir, session_id="unknown"):
+    """Track individual file operations for debugging."""
+    file_path = os.path.join(session_dir, filename)
+    file_exists = os.path.exists(file_path)
+    file_size = os.path.getsize(file_path) if file_exists else 0
+    
+    status = "EXISTS" if file_exists else "MISSING"
+    print(f"🔍 {operation} | {filename} | {status} | {file_size} bytes | Session: {session_id}")
+
 def get_or_create_session():
     """Get existing processor or create new one with session management."""
     # Check for action parameter to force new session creation
@@ -338,7 +372,8 @@ def get_or_create_session():
     if force_new_session:
         processor = DataProcessor()  # Creates new session
         print(f"🆕 Force creating new session due to _action=new_session: {processor.session_id}")
-                return processor
+        log_session_files(processor.session_dir, "FORCE_NEW_SESSION", processor.session_id)
+        return processor
     
     # **CRITICAL FIX**: For external sessions, always use the provided ID without reuse logic
     if external_session_id:
@@ -358,8 +393,10 @@ def get_or_create_session():
         
         if os.path.exists(session_dir):
             print(f"🔄 Using external session: {external_session_id} (directory exists)")
-            else:
+            log_session_files(processor.session_dir, "EXTERNAL_SESSION_REUSED", external_session_id)
+        else:
             print(f"🆕 Creating new external session: {external_session_id}")
+            log_session_files(processor.session_dir, "EXTERNAL_SESSION_NEW", external_session_id)
         
         return processor
     
@@ -369,13 +406,15 @@ def get_or_create_session():
         processor = DataProcessor()
         session['session_id'] = processor.session_id
         print(f"🆕 Created new internal session: {processor.session_id}")
+        log_session_files(processor.session_dir, "INTERNAL_SESSION_NEW", processor.session_id)
         return processor
     else:
         # Use existing internal session
         internal_session_id = session['session_id']
         processor = DataProcessor(session_id=internal_session_id)
         print(f"♻️ Reusing internal session: {internal_session_id}")
-    return processor
+        log_session_files(processor.session_dir, "INTERNAL_SESSION_REUSED", internal_session_id)
+        return processor
 
 @app.route('/', methods=['GET'])
 def index():
@@ -443,6 +482,7 @@ def upload_file():
     processor = get_or_create_session()
     
     print(f"📤 PDF Upload Request - Session: {processor.session_id}")
+    log_session_files(processor.session_dir, "BEFORE_PDF_UPLOAD", processor.session_id)
     
     if 'file' not in request.files:
         print("❌ No file part in request")
@@ -466,28 +506,34 @@ def upload_file():
             print(f"⚠️  This may cause same output for different inputs!")
             
             # Clean up existing files to prevent contamination
-            for file in existing_files:
-                file_path = os.path.join(processor.session_dir, file)
+            for file_to_remove in existing_files:
+                file_path = os.path.join(processor.session_dir, file_to_remove)
                 try:
+                    track_file_operation("CLEANUP_REMOVING", file_to_remove, processor.session_dir, processor.session_id)
                     os.remove(file_path)
-                    print(f"🧹 Removed old file: {file}")
+                    print(f"🧹 Removed old file: {file_to_remove}")
                 except Exception as e:
-                    print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
+                    print(f"⚠️ Warning: Could not remove {file_to_remove}: {str(e)}")
         
         # Save the uploaded PDF directly to session directory
         filename = secure_filename(file.filename)
         file_path = os.path.join(processor.session_dir, filename)
         file.save(file_path)
         
+        track_file_operation("PDF_UPLOADED", filename, processor.session_dir, processor.session_id)
         print(f"📏 Saved PDF size: {os.path.getsize(file_path)} bytes")
         print(f"📄 PDF saved to: {file_path}")
         print(f"📁 Session directory: {processor.session_dir}")
+        
+        log_session_files(processor.session_dir, "AFTER_PDF_UPLOAD", processor.session_id)
         
         # Process the PDF through our pipeline
         print("🔄 Initializing PDF processor...")
         pdf_processor = PDFProcessor(session_dir=processor.session_dir)
         
         print("🔄 Processing PDF...")
+        log_session_files(processor.session_dir, "BEFORE_PDF_PROCESSING", processor.session_id)
+        
         if not pdf_processor.process_first_pdf():
             print("❌ PDF processing failed - check logs for details")
             return jsonify({
@@ -495,6 +541,8 @@ def upload_file():
                 'details': 'Could not extract text from PDF. Check server logs for more details.',
                 'session_id': processor.session_id
             }), 500
+        
+        log_session_files(processor.session_dir, "AFTER_PDF_PROCESSING", processor.session_id)
         
         print("🔄 Processing extracted text files...")
         if not processor.process_all_files():
@@ -504,6 +552,8 @@ def upload_file():
                 'details': 'Could not process extracted text files. Check server logs for more details.',
                 'session_id': processor.session_id
             }), 500
+            
+        log_session_files(processor.session_dir, "AFTER_TEXT_PROCESSING", processor.session_id)
             
         # Create exporter with the same session directory
         print("🔄 Creating final CSV...")
@@ -516,6 +566,7 @@ def upload_file():
                 'session_id': processor.session_id
             }), 500
             
+        log_session_files(processor.session_dir, "AFTER_CSV_CREATION", processor.session_id)
         print("✅ PDF processed successfully!")
         return jsonify({
             'message': 'PDF processed successfully',
@@ -540,6 +591,7 @@ def upload_base64():
         processor = get_or_create_session()
         
         print(f"📤 Base64 Upload Request - Session: {processor.session_id}")
+        log_session_files(processor.session_dir, "BEFORE_BASE64_UPLOAD", processor.session_id)
         
         # Parse JSON request
         data = request.get_json()
@@ -563,13 +615,14 @@ def upload_base64():
             print(f"⚠️  This may cause same output for different inputs!")
             
             # Clean up existing files to prevent contamination
-            for file in existing_files:
-                file_path_old = os.path.join(processor.session_dir, file)
+            for file_to_remove in existing_files:
+                file_path_old = os.path.join(processor.session_dir, file_to_remove)
                 try:
+                    track_file_operation("CLEANUP_REMOVING", file_to_remove, processor.session_dir, processor.session_id)
                     os.remove(file_path_old)
-                    print(f"🧹 Removed old file: {file}")
+                    print(f"🧹 Removed old file: {file_to_remove}")
                 except Exception as e:
-                    print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
+                    print(f"⚠️ Warning: Could not remove {file_to_remove}: {str(e)}")
 
         # Handle base64 encoded data
         import base64
@@ -593,14 +646,19 @@ def upload_base64():
             with open(file_path, 'wb') as f:
                 f.write(decoded_data)
             
+            track_file_operation("BASE64_PDF_UPLOADED", filename, processor.session_dir, processor.session_id)
             print(f"📄 Base64 PDF saved to: {file_path} ({len(decoded_data)} bytes)")
             print(f"📁 Session directory: {processor.session_dir}")
+            
+            log_session_files(processor.session_dir, "AFTER_BASE64_UPLOAD", processor.session_id)
             
             # Process the PDF through our pipeline
             print("🔄 Initializing PDF processor...")
             pdf_processor = PDFProcessor(session_dir=processor.session_dir)
             
             print("🔄 Processing PDF...")
+            log_session_files(processor.session_dir, "BEFORE_BASE64_PDF_PROCESSING", processor.session_id)
+            
             if not pdf_processor.process_first_pdf():
                 print("❌ PDF processing failed - check logs for details")
                 return jsonify({
@@ -608,6 +666,8 @@ def upload_base64():
                     'details': 'Could not extract text from PDF. Check server logs for more details.',
                     'session_id': processor.session_id
                 }), 500
+                
+            log_session_files(processor.session_dir, "AFTER_BASE64_PDF_PROCESSING", processor.session_id)
                 
             print("🔄 Processing extracted text files...")
             if not processor.process_all_files():
@@ -617,6 +677,8 @@ def upload_base64():
                     'details': 'Could not process extracted text files. Check server logs for more details.',
                     'session_id': processor.session_id
                 }), 500
+                
+            log_session_files(processor.session_dir, "AFTER_BASE64_TEXT_PROCESSING", processor.session_id)
                 
             # Create exporter with the same session directory
             print("🔄 Creating final CSV...")
@@ -629,6 +691,7 @@ def upload_base64():
                     'session_id': processor.session_id
                 }), 500
                 
+            log_session_files(processor.session_dir, "AFTER_BASE64_CSV_CREATION", processor.session_id)
             print("✅ Base64 PDF processed successfully!")
             return jsonify({
                 'message': 'Base64 PDF processed successfully',
@@ -658,6 +721,7 @@ def upload_attachment():
         processor = get_or_create_session()
         
         print(f"📤 Attachment Upload Request - Session: {processor.session_id}")
+        log_session_files(processor.session_dir, "BEFORE_ATTACHMENT_UPLOAD", processor.session_id)
         
         # Try to get data from different sources
         data = None
@@ -689,13 +753,14 @@ def upload_attachment():
             print(f"⚠️  This may cause same output for different inputs!")
             
             # Clean up existing files to prevent contamination
-            for file in existing_files:
-                file_path_old = os.path.join(processor.session_dir, file)
+            for file_to_remove in existing_files:
+                file_path_old = os.path.join(processor.session_dir, file_to_remove)
                 try:
+                    track_file_operation("CLEANUP_REMOVING", file_to_remove, processor.session_dir, processor.session_id)
                     os.remove(file_path_old)
-                    print(f"🧹 Removed old file: {file}")
+                    print(f"🧹 Removed old file: {file_to_remove}")
                 except Exception as e:
-                    print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
+                    print(f"⚠️ Warning: Could not remove {file_to_remove}: {str(e)}")
 
         # Handle different data formats
         import base64
@@ -726,14 +791,19 @@ def upload_attachment():
             with open(file_path, 'wb') as f:
                 f.write(file_bytes)
             
+            track_file_operation("ATTACHMENT_PDF_UPLOADED", filename, processor.session_dir, processor.session_id)
             print(f"📄 Attachment saved to: {file_path} ({len(file_bytes)} bytes)")
             print(f"📁 Session directory: {processor.session_dir}")
+            
+            log_session_files(processor.session_dir, "AFTER_ATTACHMENT_UPLOAD", processor.session_id)
             
             # Process the PDF through our pipeline
             print("🔄 Initializing PDF processor...")
             pdf_processor = PDFProcessor(session_dir=processor.session_dir)
             
             print("🔄 Processing PDF...")
+            log_session_files(processor.session_dir, "BEFORE_ATTACHMENT_PDF_PROCESSING", processor.session_id)
+            
             if not pdf_processor.process_first_pdf():
                 print("❌ PDF processing failed - check logs for details")
                 return jsonify({
@@ -741,6 +811,8 @@ def upload_attachment():
                     'details': 'Could not extract text from PDF. Check server logs for more details.',
                     'session_id': processor.session_id
                 }), 500
+                
+            log_session_files(processor.session_dir, "AFTER_ATTACHMENT_PDF_PROCESSING", processor.session_id)
                 
             print("🔄 Processing extracted text files...")
             if not processor.process_all_files():
@@ -750,6 +822,8 @@ def upload_attachment():
                     'details': 'Could not process extracted text files. Check server logs for more details.',
                     'session_id': processor.session_id
                 }), 500
+                
+            log_session_files(processor.session_dir, "AFTER_ATTACHMENT_TEXT_PROCESSING", processor.session_id)
                 
             # Create exporter with the same session directory
             print("🔄 Creating final CSV...")
@@ -762,6 +836,7 @@ def upload_attachment():
                     'session_id': processor.session_id
                 }), 500
                 
+            log_session_files(processor.session_dir, "AFTER_ATTACHMENT_CSV_CREATION", processor.session_id)
             print("✅ Attachment processed successfully!")
             return jsonify({
                 'message': 'Attachment processed successfully',
@@ -791,6 +866,7 @@ def upload_csv():
         processor = get_or_create_session()
         
         print(f"📄 CSV Upload Request - Session: {processor.session_id}")
+        log_session_files(processor.session_dir, "BEFORE_CSV_UPLOAD", processor.session_id)
         print(f"Content-Type: {request.content_type}")
         print(f"Request method: {request.method}")
         print(f"Files: {list(request.files.keys())}")
@@ -804,12 +880,13 @@ def upload_csv():
             if 'file' in request.files:
                 file = request.files['file']
                 if file.filename != '':
-        if not allowed_file(file.filename, ALLOWED_CSV_EXTENSIONS):
-            return jsonify({'error': 'Invalid file type. Please upload a CSV or Excel file'}), 400
-            
-        filename = secure_filename(f"temp_{file.filename}")
-        file_path = os.path.join(processor.session_dir, filename)
-            file.save(file_path)
+                    if not allowed_file(file.filename, ALLOWED_CSV_EXTENSIONS):
+                        return jsonify({'error': 'Invalid file type. Please upload a CSV or Excel file'}), 400
+                    
+                    filename = secure_filename(f"temp_{file.filename}")
+                    file_path = os.path.join(processor.session_dir, filename)
+                    file.save(file_path)
+                    track_file_operation("CSV_UPLOADED", filename, processor.session_dir, processor.session_id)
                     print(f"✅ CSV file saved via multipart upload")
                     
             # Method 2: Handle JSON data with CSV content
@@ -827,6 +904,7 @@ def upload_csv():
                     
                     with open(file_path, 'w', newline='', encoding='utf-8') as f:
                         f.write(csv_content)
+                    track_file_operation("CSV_JSON_UPLOADED", filename, processor.session_dir, processor.session_id)
                     print(f"✅ CSV data saved from JSON")
                     
                 elif json_data and 'file_data' in json_data:
@@ -848,6 +926,7 @@ def upload_csv():
                     
                     with open(file_path, 'w', newline='', encoding='utf-8') as f:
                         f.write(csv_content)
+                    track_file_operation("CSV_BASE64_UPLOADED", filename, processor.session_dir, processor.session_id)
                     print(f"✅ CSV data saved from base64")
                     
             # Method 3: Handle raw CSV data in form field
@@ -860,6 +939,7 @@ def upload_csv():
                 
                 with open(file_path, 'w', newline='', encoding='utf-8') as f:
                     f.write(csv_content)
+                track_file_operation("CSV_FORM_UPLOADED", filename, processor.session_dir, processor.session_id)
                 print(f"✅ CSV data saved from form field")
                 
             # Method 4: Handle raw CSV data in request body
@@ -872,6 +952,7 @@ def upload_csv():
                 
                 with open(file_path, 'w', newline='', encoding='utf-8') as f:
                     f.write(csv_content)
+                track_file_operation("CSV_RAW_UPLOADED", filename, processor.session_dir, processor.session_id)
                 print(f"✅ CSV data saved from raw body")
                 
             else:
@@ -886,24 +967,30 @@ def upload_csv():
                     ]
                 }), 400
             
+            log_session_files(processor.session_dir, "AFTER_CSV_SAVE", processor.session_id)
+            
             # Process the CSV file
             if file_path and os.path.exists(file_path):
-            success, message = process_csv_file(file_path, processor.session_dir)
-            
-            if not success:
-                return jsonify({'error': message}), 400
+                print(f"🔄 Processing CSV file: {file_path}")
+                success, message = process_csv_file(file_path, processor.session_dir)
                 
-            return jsonify({
-                'message': 'CSV data mapped successfully',
+                log_session_files(processor.session_dir, "AFTER_CSV_PROCESSING", processor.session_id)
+                
+                if not success:
+                    return jsonify({'error': message}), 400
+                    
+                return jsonify({
+                    'message': 'CSV data mapped successfully',
                     'status': 'success',
                     'session_id': processor.session_id
-            }), 200
+                }), 200
             else:
                 return jsonify({'error': 'Failed to save CSV data'}), 500
             
         finally:
             # Clean up temporary file
             if file_path and os.path.exists(file_path):
+                track_file_operation("CSV_TEMP_CLEANUP", os.path.basename(file_path), processor.session_dir, processor.session_id)
                 os.remove(file_path)
                 print(f"🧹 Cleaned up temporary file: {file_path}")
                 
@@ -919,6 +1006,11 @@ def download_file():
         # Get existing processor with session directory
         processor = get_or_create_session()
         csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
+        
+        print(f"📥 Download Request - Session: {processor.session_id}")
+        log_session_files(processor.session_dir, "BEFORE_DOWNLOAD", processor.session_id)
+        track_file_operation("DOWNLOAD_REQUEST", OUTPUT_CSV_NAME, processor.session_dir, processor.session_id)
+        
         return send_file(csv_path, as_attachment=True)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -930,6 +1022,10 @@ def download_bol_file():
         # Get existing processor with session directory
         processor = get_or_create_session()
         csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
+        
+        print(f"📥 BOL Download Request - Session: {processor.session_id}")
+        log_session_files(processor.session_dir, "BEFORE_BOL_DOWNLOAD", processor.session_id)
+        track_file_operation("BOL_DOWNLOAD_REQUEST", OUTPUT_CSV_NAME, processor.session_dir, processor.session_id)
         
         if not os.path.exists(csv_path):
             return jsonify({'error': 'No processed file available'}), 404
@@ -967,6 +1063,9 @@ def get_status():
         # Get existing processor with session directory
         processor = get_or_create_session()
         csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
+        
+        print(f"📊 Status Request - Session: {processor.session_id}")
+        log_session_files(processor.session_dir, "STATUS_CHECK", processor.session_id)
         
         status = {
             'session_id': processor.session_id,
@@ -1096,6 +1195,9 @@ def clear_session():
             # Clear specific external session
             session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', external_session_id)
             
+            print(f"🗑️ Clearing external session: {external_session_id}")
+            log_session_files(session_dir, "BEFORE_EXTERNAL_CLEAR", external_session_id)
+            
             if os.path.exists(session_dir):
                 try:
                     shutil.rmtree(session_dir)
@@ -1113,6 +1215,9 @@ def clear_session():
             if 'session_id' in session:
                 old_session_id = session['session_id']
                 session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', old_session_id)
+                
+                print(f"🗑️ Clearing internal session: {old_session_id}")
+                log_session_files(session_dir, "BEFORE_INTERNAL_CLEAR", old_session_id)
                 
                 if os.path.exists(session_dir):
                     try:
@@ -1152,6 +1257,9 @@ def auto_reset():
         processor = get_or_create_session()
         current_session = processor.session_id
         
+        print(f"🔄 Auto-reset for session: {current_session}")
+        log_session_files(processor.session_dir, "BEFORE_AUTO_RESET", current_session)
+        
         # Clear current session
         if 'session_id' in session:
             session.pop('session_id', None)
@@ -1165,6 +1273,9 @@ def auto_reset():
         
         # Create fresh session
         new_processor = get_or_create_session()
+        
+        print(f"🆕 Auto-reset created new session: {new_processor.session_id}")
+        log_session_files(new_processor.session_dir, "AFTER_AUTO_RESET", new_processor.session_id)
         
         return jsonify({
             'status': 'success',
