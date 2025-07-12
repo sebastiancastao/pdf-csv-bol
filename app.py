@@ -368,10 +368,17 @@ def get_or_create_session():
             print(f"🆕 Creating new external session directory: {external_session_id}")
         
         # Create processor with the cleaned session ID
-        processor = DataProcessor(session_id=external_session_id)
-        print(f"🔒 External session isolated and ready: {external_session_id}")
-        
-        return processor
+        try:
+            processor = DataProcessor(session_id=external_session_id)
+            print(f"🔒 External session isolated and ready: {external_session_id}")
+            return processor
+        except Exception as e:
+            print(f"❌ Failed to create external session {external_session_id}: {str(e)}")
+            # Fall back to creating a new session
+            print("🔄 Falling back to creating a new session...")
+            processor = DataProcessor()
+            print(f"🆕 Fallback session created: {processor.session_id}")
+            return processor
     
     # For internal Flask sessions (web UI), use simple logic
     if 'session_id' not in session:
@@ -1394,6 +1401,41 @@ def debug_request():
 def ping():
     """Simple ping endpoint to check if the service is alive."""
     return jsonify({'status': 'alive', 'message': 'BOL Extractor service is running'})
+
+@app.route('/wake-up')
+def wake_up():
+    """Wake up endpoint specifically for handling service sleep state."""
+    try:
+        import time
+        wake_time = time.time()
+        
+        # Test basic functionality
+        test_processor = get_or_create_session()
+        
+        response_data = {
+            'status': 'awake',
+            'message': 'BOL Extractor service is fully awake and ready',
+            'wake_time': wake_time,
+            'session_test': 'passed',
+            'session_id': test_processor.session_id,
+            'endpoints_ready': True,
+            'instructions': {
+                'upload_pdf': 'POST /upload with multipart form data',
+                'upload_csv': 'POST /upload-csv with multipart form data', 
+                'download': 'GET /download-bol',
+                'session_management': 'Use ?_sid=your_session_id for external apps'
+            }
+        }
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'waking_up',
+            'error': str(e),
+            'message': 'Service is starting up, please retry in 30 seconds',
+            'retry_after': 30
+        }), 503
 
 @app.route('/api/health')
 def api_health():

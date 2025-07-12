@@ -25,8 +25,29 @@ class DataProcessor:
 
     def _setup_session_directory(self):
         """Create the session directory if it doesn't exist."""
-        os.makedirs(self.session_dir, exist_ok=True)
-        print(f"Created session directory: {self.session_dir}")
+        try:
+            # Ensure parent directories exist first
+            parent_dir = os.path.dirname(self.session_dir)
+            os.makedirs(parent_dir, exist_ok=True)
+            
+            # Create the session directory
+            os.makedirs(self.session_dir, exist_ok=True)
+            
+            # Verify the directory was created and is accessible
+            if not os.path.exists(self.session_dir):
+                raise Exception(f"Failed to create session directory: {self.session_dir}")
+            
+            if not os.access(self.session_dir, os.W_OK):
+                raise Exception(f"Session directory not writable: {self.session_dir}")
+            
+            print(f"✅ Session directory ready: {self.session_dir}")
+            
+        except Exception as e:
+            print(f"❌ Failed to setup session directory: {str(e)}")
+            print(f"❌ Attempted path: {self.session_dir}")
+            print(f"❌ Base directory: {self.base_dir}")
+            print(f"❌ Current working directory: {os.getcwd()}")
+            raise Exception(f"Session directory setup failed: {str(e)}")
 
     @staticmethod
     def cleanup_sessions():
