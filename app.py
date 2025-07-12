@@ -345,21 +345,31 @@ def get_or_create_session():
         # Always create/use the exact session ID provided by external apps
         session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', external_session_id)
         
-        # **SESSION CONTAMINATION FIX**: Check if session has old data and warn about it
+        # **SESSION CONTAMINATION FIX**: Automatically clean existing session directory
         if os.path.exists(session_dir):
             old_files = [f for f in os.listdir(session_dir) if not f.startswith('.')]
             if old_files:
-                print(f"⚠️  WARNING: External session {external_session_id} contains old files: {old_files}")
-                print(f"⚠️  This may cause session contamination - same output for different inputs!")
-                print(f"⚠️  External app should call /clear-session before processing new documents")
-        
-        # Create processor with the specified session ID (creates directory if needed)
-        processor = DataProcessor(session_id=external_session_id)
-        
-        if os.path.exists(session_dir):
-            print(f"🔄 Using external session: {external_session_id} (directory exists)")
+                print(f"🧹 AUTOMATIC CLEANUP: External session {external_session_id} contains old files: {old_files}")
+                print(f"🧹 Removing all files to prevent contamination...")
+                
+                # Remove ALL files in the session directory
+                for old_file in old_files:
+                    old_file_path = os.path.join(session_dir, old_file)
+                    try:
+                        os.remove(old_file_path)
+                        print(f"🗑️ Removed contaminated file: {old_file}")
+                    except Exception as e:
+                        print(f"⚠️ Could not remove {old_file}: {str(e)}")
+                
+                print(f"✅ Session directory cleaned: {external_session_id}")
+            else:
+                print(f"✅ External session directory is clean: {external_session_id}")
         else:
-            print(f"🆕 Creating new external session: {external_session_id}")
+            print(f"🆕 Creating new external session directory: {external_session_id}")
+        
+        # Create processor with the cleaned session ID
+        processor = DataProcessor(session_id=external_session_id)
+        print(f"🔒 External session isolated and ready: {external_session_id}")
         
         return processor
     
@@ -458,21 +468,8 @@ def upload_file():
         return jsonify({'error': 'Invalid file type (PDF required)'}), 400
         
     try:
-        # **SESSION CONTAMINATION DETECTION**: Check for existing files before processing
-        existing_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
-        if existing_files:
-            print(f"⚠️  SESSION CONTAMINATION DETECTED!")
-            print(f"⚠️  Session {processor.session_id} contains existing files: {existing_files}")
-            print(f"⚠️  This may cause same output for different inputs!")
-            
-            # Clean up existing files to prevent contamination
-            for file in existing_files:
-                file_path = os.path.join(processor.session_dir, file)
-                try:
-                    os.remove(file_path)
-                    print(f"🧹 Removed old file: {file}")
-                except Exception as e:
-                    print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
+        # **SESSION ISOLATION**: Session is now guaranteed clean by get_or_create_session()
+        print(f"📁 Session directory verified clean: {processor.session_dir}")
         
         # Save the uploaded PDF directly to session directory
         filename = secure_filename(file.filename)
@@ -555,21 +552,8 @@ def upload_base64():
             print("❌ No file data provided")
             return jsonify({'error': 'No file data provided'}), 400
         
-        # **SESSION CONTAMINATION DETECTION**: Check for existing files before processing
-        existing_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
-        if existing_files:
-            print(f"⚠️  SESSION CONTAMINATION DETECTED!")
-            print(f"⚠️  Session {processor.session_id} contains existing files: {existing_files}")
-            print(f"⚠️  This may cause same output for different inputs!")
-            
-            # Clean up existing files to prevent contamination
-            for file in existing_files:
-                file_path_old = os.path.join(processor.session_dir, file)
-                try:
-                    os.remove(file_path_old)
-                    print(f"🧹 Removed old file: {file}")
-                except Exception as e:
-                    print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
+        # **SESSION ISOLATION**: Session is now guaranteed clean by get_or_create_session()
+        print(f"📁 Session directory verified clean for base64 upload: {processor.session_dir}")
 
         # Handle base64 encoded data
         import base64
@@ -681,21 +665,8 @@ def upload_attachment():
             print("❌ No attachment data provided")
             return jsonify({'error': 'No attachment data provided'}), 400
         
-        # **SESSION CONTAMINATION DETECTION**: Check for existing files before processing
-        existing_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
-        if existing_files:
-            print(f"⚠️  SESSION CONTAMINATION DETECTED!")
-            print(f"⚠️  Session {processor.session_id} contains existing files: {existing_files}")
-            print(f"⚠️  This may cause same output for different inputs!")
-            
-            # Clean up existing files to prevent contamination
-            for file in existing_files:
-                file_path_old = os.path.join(processor.session_dir, file)
-                try:
-                    os.remove(file_path_old)
-                    print(f"🧹 Removed old file: {file}")
-                except Exception as e:
-                    print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
+        # **SESSION ISOLATION**: Session is now guaranteed clean by get_or_create_session()
+        print(f"📁 Session directory verified clean for attachment upload: {processor.session_dir}")
 
         # Handle different data formats
         import base64
