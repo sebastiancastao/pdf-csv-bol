@@ -17,11 +17,18 @@ from config import OUTPUT_CSV_NAME  # e.g. "combined_data.csv"
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = os.path.dirname(os.path.abspath(__file__))
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+# Cookie configuration for cross-origin support
 app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Allow cookie in iframe
-app.config['SESSION_COOKIE_SECURE'] = False  # Set to True in production with HTTPS
+# Auto-detect HTTPS environment for secure cookies
+is_production = os.environ.get('RENDER') or os.environ.get('RAILWAY') or os.environ.get('HEROKU')
+app.config['SESSION_COOKIE_SECURE'] = bool(is_production)  # Required for SameSite=None on HTTPS
 app.config['SESSION_COOKIE_HTTPONLY'] = True  # Security best practice
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # Session expires after 1 hour
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-here')  # Use env var in production
+
+# Log cookie configuration for debugging
+cookie_config = f"SameSite=None, Secure={app.config['SESSION_COOKIE_SECURE']}, HttpOnly={app.config['SESSION_COOKIE_HTTPONLY']}"
+print(f"🍪 Cookie Configuration: {cookie_config} (Production: {bool(is_production)})")
 
 # Allowed extensions for PDF upload
 ALLOWED_PDF_EXTENSIONS = {'pdf'}
@@ -412,10 +419,22 @@ def health():
     # Check if poppler is working
     poppler_status = "working" if os.environ.get('POPPLER_WORKING') else "not working"
     
+    # Cookie configuration status
+    is_production = os.environ.get('RENDER') or os.environ.get('RAILWAY') or os.environ.get('HEROKU')
+    cookie_status = {
+        "samesite": app.config.get('SESSION_COOKIE_SAMESITE'),
+        "secure": app.config.get('SESSION_COOKIE_SECURE'),
+        "httponly": app.config.get('SESSION_COOKIE_HTTPONLY'),
+        "is_production": bool(is_production),
+        "environment": os.environ.get('RENDER', 'local'),
+        "cookies_valid": app.config.get('SESSION_COOKIE_SECURE') == bool(is_production)
+    }
+    
     return jsonify({
         "status": "healthy",
         "poppler_status": poppler_status,
-        "environment": os.environ.get('RENDER', 'local')
+        "environment": os.environ.get('RENDER', 'local'),
+        "cookie_config": cookie_status
     }), 200
 
 @app.route('/upload', methods=['POST'])
