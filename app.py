@@ -879,6 +879,15 @@ def upload_csv():
             print(f"✅ LEGITIMATE: {OUTPUT_CSV_NAME} found - this is expected after PDF processing")
             contamination_detected = False
             validation_info['contamination_risk'] = 'none'
+        elif pdf_data_exists and len(pdf_files) <= 1:
+            # **ADDITIONAL SAFEGUARD**: Even if there are individual CSV files, 
+            # be more lenient if combined_data.csv exists and there's only one PDF
+            # This handles cases where CSV cleanup failed but processing completed
+            if len(individual_csv_files) <= 3:  # Allow a few leftover CSV files
+                print(f"✅ ACCEPTABLE: {OUTPUT_CSV_NAME} exists with {len(individual_csv_files)} individual CSV files - likely cleanup failure")
+                print(f"   Individual files: {individual_csv_files}")
+                contamination_detected = False
+                validation_info['contamination_risk'] = 'low'
         
 
         

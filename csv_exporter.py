@@ -33,13 +33,13 @@ class CSVExporter:
                 
                 # Read and combine chunk of CSV files
                 dfs = []
+                files_to_remove = []
                 for file in chunk:
                     try:
                         # Read CSV in chunks
                         for df_chunk in pd.read_csv(file, chunksize=1000, dtype=str):
                             dfs.append(df_chunk)
-                        # Delete the individual CSV file after reading
-                        os.remove(file)
+                        files_to_remove.append(file)  # Mark for removal after reading
                     except Exception as e:
                         print(f"Error processing {file}: {str(e)}")
                         continue
@@ -57,6 +57,24 @@ class CSVExporter:
                 else:
                     # Append without header for subsequent chunks
                     chunk_df.to_csv(output_path, index=False, mode='a', header=False)
+
+                # **ROBUST CLEANUP**: Remove individual CSV files after successful combining
+                for file in files_to_remove:
+                    max_attempts = 3
+                    for attempt in range(max_attempts):
+                        try:
+                            if os.path.exists(file):
+                                os.remove(file)
+                                print(f"✅ Removed individual CSV: {os.path.basename(file)}")
+                                break
+                        except Exception as e:
+                            if attempt < max_attempts - 1:
+                                print(f"⚠️ Attempt {attempt + 1} failed to remove {file}: {str(e)}")
+                                import time
+                                time.sleep(0.1)  # Brief wait before retry
+                            else:
+                                print(f"❌ FAILED to remove {file} after {max_attempts} attempts: {str(e)}")
+                                print(f"❌ This may cause contamination detection in future workflows")
 
                 # Clear memory
                 del dfs
