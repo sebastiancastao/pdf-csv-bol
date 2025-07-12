@@ -338,7 +338,7 @@ def get_or_create_session():
     if force_new_session:
         processor = DataProcessor()  # Creates new session
         print(f"🆕 Force creating new session due to _action=new_session: {processor.session_id}")
-        return processor
+                return processor
     
     # **ENHANCED EXTERNAL SESSION HANDLING**
     if external_session_id:
@@ -369,7 +369,7 @@ def get_or_create_session():
             if contamination_detected:
                 status += " (⚠️ contamination detected)"
             print(f"{status}: {external_session_id}")
-        else:
+            else:
             print(f"🆕 Creating new external session: {external_session_id}")
         
         return processor
@@ -386,7 +386,7 @@ def get_or_create_session():
         internal_session_id = session['session_id']
         processor = DataProcessor(session_id=internal_session_id)
         print(f"♻️ Reusing internal session: {internal_session_id}")
-        return processor
+    return processor
 
 @app.route('/', methods=['GET'])
 def index():
@@ -795,7 +795,7 @@ def upload_csv():
         print(f"Form data: {list(request.form.keys())}")
         print(f"JSON data: {request.is_json}")
         
-        # **CSV UPLOAD VALIDATION**
+        # **ENHANCED CSV UPLOAD VALIDATION WITH CONTAMINATION PREVENTION**
         # Check if there's processed PDF data to merge with
         combined_csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
         pdf_data_exists = os.path.exists(combined_csv_path)
@@ -809,7 +809,7 @@ def upload_csv():
                 'requires_pdf_first': True
             }), 400
         
-        # Check session contamination risk
+        # **CRITICAL CONTAMINATION CHECK**: Validate session freshness and data integrity
         session_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
         external_session_id = request.args.get('_sid') or request.args.get('session_id')
         
@@ -817,12 +817,75 @@ def upload_csv():
             'session_type': 'external' if external_session_id else 'internal',
             'session_files': session_files,
             'has_pdf_data': pdf_data_exists,
-            'contamination_risk': 'low'
+            'contamination_risk': 'low',
+            'session_id': processor.session_id
         }
         
+        # **ENHANCED CONTAMINATION DETECTION**
+        contamination_detected = False
+        contamination_reasons = []
+        
         # Check for signs of contamination
-        if len(session_files) > 5:  # More files than expected
+        if len(session_files) > 5:  # More files than expected for a fresh workflow
+            contamination_detected = True
+            contamination_reasons.append(f'Excessive files detected ({len(session_files)} files)')
+            validation_info['contamination_risk'] = 'high'
+        
+        # Check for old individual CSV files (should be cleaned up after combine_to_csv)
+        individual_csv_files = [f for f in session_files if f.endswith('.csv') and f != OUTPUT_CSV_NAME]
+        if individual_csv_files:
+            contamination_detected = True
+            contamination_reasons.append(f'Individual CSV files detected: {individual_csv_files}')
             validation_info['contamination_risk'] = 'medium'
+        
+        # Check combined_data.csv modification time vs session creation
+        if pdf_data_exists:
+            try:
+                csv_mtime = os.path.getmtime(combined_csv_path)
+                session_ctime = os.path.getctime(processor.session_dir)
+                time_diff = csv_mtime - session_ctime
+                
+                # If CSV is significantly older than session directory, it might be from a previous run
+                if time_diff < -60:  # CSV created more than 1 minute before session
+                    contamination_detected = True
+                    contamination_reasons.append(f'CSV file predates session by {abs(int(time_diff))} seconds')
+                    validation_info['contamination_risk'] = 'high'
+                    
+                validation_info['csv_age_vs_session'] = int(time_diff)
+            except Exception as time_error:
+                print(f"⚠️ Could not check file timestamps: {str(time_error)}")
+        
+        # **STRICT CONTAMINATION HANDLING FOR AUTOMATED WORKFLOWS**
+        if contamination_detected and external_session_id:
+            validation_info['contamination_detected'] = True
+            validation_info['contamination_reasons'] = contamination_reasons
+            
+            print(f"🚫 REJECTING CSV UPLOAD: Session contamination detected")
+            print(f"🚫 Contamination reasons: {contamination_reasons}")
+            print(f"🚫 Session files: {session_files}")
+            
+            return jsonify({
+                'error': 'Session contamination detected',
+                'message': 'This session contains data from a previous workflow that could cause incorrect results. Please clear the session and start fresh.',
+                'session_validation': validation_info,
+                'recommended_actions': [
+                    f'POST /clear-session?_sid={external_session_id}',
+                    f'POST /new-session?_sid={external_session_id}',
+                    f'POST /upload?_sid={external_session_id}',
+                    f'POST /upload-csv?_sid={external_session_id}'
+                ],
+                'contamination_details': {
+                    'reasons': contamination_reasons,
+                    'session_files': session_files,
+                    'risk_level': validation_info['contamination_risk']
+                }
+            }), 409  # 409 Conflict - session state prevents operation
+        
+        # For internal sessions, just warn but continue (manual workflows)
+        if contamination_detected and not external_session_id:
+            validation_info['contamination_detected'] = True
+            validation_info['contamination_reasons'] = contamination_reasons
+            print(f"⚠️ Warning: Internal session contamination detected but continuing: {contamination_reasons}")
         
         print(f"📊 CSV Upload Session Validation: {validation_info}")
         
@@ -924,7 +987,7 @@ def upload_csv():
                         'error': message,
                         'session_validation': validation_info
                     }), 400
-                    
+                
                 return jsonify({
                     'message': 'CSV data mapped successfully',
                     'status': 'success',
@@ -1132,17 +1195,58 @@ def clear_session():
             # Clear specific external session
             session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', external_session_id)
             
+            # **ENHANCED CLEANUP**: Remove individual problematic files first before directory removal
+            cleanup_result = {
+                'session_id': external_session_id,
+                'files_removed': [],
+                'errors': []
+            }
+            
             if os.path.exists(session_dir):
                 try:
+                    # **CRITICAL FIX**: Explicitly remove combined_data.csv first
+                    combined_csv_path = os.path.join(session_dir, OUTPUT_CSV_NAME)
+                    if os.path.exists(combined_csv_path):
+                        try:
+                            os.remove(combined_csv_path)
+                            cleanup_result['files_removed'].append(OUTPUT_CSV_NAME)
+                            print(f"🗑️ Explicitly removed contaminating file: {OUTPUT_CSV_NAME}")
+                        except Exception as csv_error:
+                            error_msg = f"Failed to remove {OUTPUT_CSV_NAME}: {str(csv_error)}"
+                            cleanup_result['errors'].append(error_msg)
+                            print(f"⚠️ {error_msg}")
+                    
+                    # List all files for logging before removal
+                    try:
+                        existing_files = [f for f in os.listdir(session_dir) if not f.startswith('.')]
+                        if existing_files:
+                            print(f"🗑️ Removing {len(existing_files)} files from session {external_session_id}: {existing_files}")
+                            cleanup_result['files_removed'].extend(existing_files)
+                    except Exception as list_error:
+                        print(f"⚠️ Could not list session files: {str(list_error)}")
+                    
+                    # Remove entire session directory
                     shutil.rmtree(session_dir)
                     print(f"🗑️ Cleared external session directory: {external_session_id}")
+                    
+                    # **VERIFICATION STEP**: Ensure directory is actually gone
+                    if os.path.exists(session_dir):
+                        error_msg = f"Session directory still exists after cleanup: {session_dir}"
+                        cleanup_result['errors'].append(error_msg)
+                        print(f"⚠️ {error_msg}")
+                    else:
+                        print(f"✅ Verified session directory completely removed: {external_session_id}")
+                        
                 except Exception as e:
-                    print(f"⚠️ Error clearing external session {external_session_id}: {str(e)}")
+                    error_msg = f"Error clearing external session {external_session_id}: {str(e)}"
+                    cleanup_result['errors'].append(error_msg)
+                    print(f"⚠️ {error_msg}")
                     
             return jsonify({
                 'message': f'External session {external_session_id} cleared',
                 'session_id': external_session_id,
-                'status': 'cleared'
+                'status': 'cleared' if not cleanup_result['errors'] else 'partial_cleanup',
+                'cleanup_details': cleanup_result
             })
         else:
             # Clear Flask session (internal)
@@ -1150,12 +1254,43 @@ def clear_session():
                 old_session_id = session['session_id']
                 session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', old_session_id)
                 
+                # **ENHANCED CLEANUP** for internal sessions too
+                cleanup_result = {
+                    'session_id': old_session_id,
+                    'files_removed': [],
+                    'errors': []
+                }
+                
                 if os.path.exists(session_dir):
                     try:
+                        # **CRITICAL FIX**: Explicitly remove combined_data.csv first
+                        combined_csv_path = os.path.join(session_dir, OUTPUT_CSV_NAME)
+                        if os.path.exists(combined_csv_path):
+                            try:
+                                os.remove(combined_csv_path)
+                                cleanup_result['files_removed'].append(OUTPUT_CSV_NAME)
+                                print(f"🗑️ Explicitly removed contaminating file: {OUTPUT_CSV_NAME}")
+                            except Exception as csv_error:
+                                error_msg = f"Failed to remove {OUTPUT_CSV_NAME}: {str(csv_error)}"
+                                cleanup_result['errors'].append(error_msg)
+                                print(f"⚠️ {error_msg}")
+                        
+                        # Remove entire session directory
                         shutil.rmtree(session_dir)
                         print(f"🗑️ Cleared internal session directory: {old_session_id}")
+                        
+                        # **VERIFICATION STEP**: Ensure directory is actually gone
+                        if os.path.exists(session_dir):
+                            error_msg = f"Session directory still exists after cleanup: {session_dir}"
+                            cleanup_result['errors'].append(error_msg)
+                            print(f"⚠️ {error_msg}")
+                        else:
+                            print(f"✅ Verified session directory completely removed: {old_session_id}")
+                            
                     except Exception as e:
-                        print(f"⚠️ Error clearing internal session {old_session_id}: {str(e)}")
+                        error_msg = f"Error clearing internal session {old_session_id}: {str(e)}"
+                        cleanup_result['errors'].append(error_msg)
+                        print(f"⚠️ {error_msg}")
                 
                 # Clear Flask session
                 session.clear()
@@ -1164,7 +1299,8 @@ def clear_session():
                 return jsonify({
                     'message': f'Internal session {old_session_id} cleared',
                     'session_id': old_session_id,
-                    'status': 'cleared'
+                    'status': 'cleared' if not cleanup_result['errors'] else 'partial_cleanup',
+                    'cleanup_details': cleanup_result
                 })
             else:
                 return jsonify({
@@ -1229,41 +1365,116 @@ def new_session():
             # Create new session with the specific ID requested
             session_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'processing_sessions', requested_session_id)
             
-            # **SESSION CONTAMINATION FIX**: Always clean existing session directory first
+            # **ENHANCED SESSION CONTAMINATION FIX**: Always clean existing session directory first
             cleanup_performed = False
+            contamination_details = {}
+            
             if os.path.exists(session_dir):
                 try:
                     old_files = [f for f in os.listdir(session_dir) if not f.startswith('.')]
                     if old_files:
                         print(f"🧹 Cleaning existing session {requested_session_id} with files: {old_files}")
                         cleanup_performed = True
+                        contamination_details = {
+                            'previous_files': old_files,
+                            'had_combined_csv': OUTPUT_CSV_NAME in old_files,
+                            'file_count': len(old_files)
+                        }
+                        
+                        # **CRITICAL**: Explicitly remove combined_data.csv first
+                        combined_csv_path = os.path.join(session_dir, OUTPUT_CSV_NAME)
+                        if os.path.exists(combined_csv_path):
+                            os.remove(combined_csv_path)
+                            print(f"🗑️ Explicitly removed contaminating {OUTPUT_CSV_NAME}")
                     
                     shutil.rmtree(session_dir)
                     print(f"🗑️ Cleaned existing session directory: {requested_session_id}")
+                    
+                    # **VERIFICATION**: Ensure complete removal
+                    import time
+                    max_retries = 3
+                    for retry in range(max_retries):
+                        if not os.path.exists(session_dir):
+                            break
+                        time.sleep(0.1)  # Brief wait for filesystem
+                        print(f"⏳ Waiting for directory cleanup (attempt {retry + 1})")
+                    
+                    if os.path.exists(session_dir):
+                        print(f"⚠️ Warning: Directory still exists after cleanup attempts")
+                        
                 except Exception as e:
                     print(f"⚠️ Warning: Could not clean existing directory: {str(e)}")
+                    contamination_details['cleanup_error'] = str(e)
             
-            # Create processor with clean session directory
-            processor = DataProcessor(session_id=requested_session_id)
-            print(f"🆕 Created fresh external session: {requested_session_id}")
+            # **ENHANCED SESSION ISOLATION**: Add timestamp to ensure uniqueness
+            if not requested_session_id.endswith('_fresh'):
+                # Create a truly fresh session ID to avoid reuse conflicts
+                import time
+                import uuid
+                timestamp = int(time.time() * 1000)  # Millisecond precision
+                unique_suffix = str(uuid.uuid4())[:8]
+                fresh_session_id = f"{requested_session_id}_fresh_{timestamp}_{unique_suffix}"
+                
+                print(f"🔄 Creating enhanced session ID for better isolation: {fresh_session_id}")
+                
+                # Create processor with enhanced session ID
+                processor = DataProcessor(session_id=fresh_session_id)
+                final_session_id = fresh_session_id
+                session_dir = processor.session_dir
+            else:
+                # Use the requested session ID as-is (already enhanced)
+                processor = DataProcessor(session_id=requested_session_id)
+                final_session_id = requested_session_id
+            
+            print(f"🆕 Created fresh external session: {final_session_id}")
+            
+            # **VERIFICATION**: Ensure new session directory is clean
+            verification_result = {
+                'directory_created': os.path.exists(session_dir),
+                'is_empty': True,
+                'files_found': []
+            }
+            
+            if os.path.exists(session_dir):
+                session_files = [f for f in os.listdir(session_dir) if not f.startswith('.')]
+                verification_result['is_empty'] = len(session_files) == 0
+                verification_result['files_found'] = session_files
+                
+                if session_files:
+                    print(f"⚠️ Warning: New session directory is not empty: {session_files}")
             
             return jsonify({
                 'status': 'created',
-                'session_id': requested_session_id,
+                'session_id': final_session_id,
                 'session_dir': session_dir,
-                'message': f'New external session {requested_session_id} created',
+                'message': f'New external session {final_session_id} created',
                 'type': 'external',
                 'cleanup_performed': cleanup_performed,
-                'previous_files_removed': cleanup_performed
+                'previous_files_removed': cleanup_performed,
+                'contamination_details': contamination_details,
+                'verification': verification_result,
+                'enhanced_isolation': final_session_id != requested_session_id
             })
         else:
             # Create new internal Flask session
             # Clear any existing Flask session first
             session.clear()
             
-            # Create new processor (generates new session ID)
-            processor = DataProcessor()
+            # **ENHANCED INTERNAL SESSION**: Create with better isolation
+            processor = DataProcessor()  # Generates new session ID with timestamp
             session['session_id'] = processor.session_id
+            
+            # **VERIFICATION**: Ensure internal session is clean
+            verification_result = {
+                'directory_created': os.path.exists(processor.session_dir),
+                'is_empty': True,
+                'files_found': []
+            }
+            
+            if os.path.exists(processor.session_dir):
+                session_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
+                verification_result['is_empty'] = len(session_files) == 0
+                verification_result['files_found'] = session_files
             
             print(f"🆕 Created fresh internal session: {processor.session_id}")
             
@@ -1272,7 +1483,8 @@ def new_session():
                 'session_id': processor.session_id,
                 'session_dir': processor.session_dir,
                 'message': f'New internal session {processor.session_id} created',
-                'type': 'internal'
+                'type': 'internal',
+                'verification': verification_result
             })
             
     except Exception as e:
@@ -1772,11 +1984,12 @@ def auto_clean_session():
             'contamination_detected': False,
             'files_removed': [],
             'cleanup_performed': False,
-            'status': 'clean'
+            'status': 'clean',
+            'detailed_analysis': {}
         }
         
         if os.path.exists(session_dir):
-            # Check for contamination
+            # **COMPREHENSIVE CONTAMINATION ANALYSIS**
             existing_files = [f for f in os.listdir(session_dir) if not f.startswith('.')]
             
             if existing_files:
@@ -1784,31 +1997,132 @@ def auto_clean_session():
                 result['files_found'] = existing_files
                 result['status'] = 'contaminated'
                 
+                # **DETAILED FILE ANALYSIS**
+                file_analysis = {
+                    'total_files': len(existing_files),
+                    'pdf_files': [f for f in existing_files if f.lower().endswith('.pdf')],
+                    'txt_files': [f for f in existing_files if f.lower().endswith('.txt')],
+                    'csv_files': [f for f in existing_files if f.lower().endswith('.csv')],
+                    'combined_csv_present': OUTPUT_CSV_NAME in existing_files,
+                    'individual_csv_files': [f for f in existing_files if f.endswith('.csv') and f != OUTPUT_CSV_NAME],
+                    'other_files': [f for f in existing_files if not any(f.lower().endswith(ext) for ext in ['.pdf', '.txt', '.csv'])]
+                }
+                
+                # **CONTAMINATION RISK ASSESSMENT**
+                risk_factors = []
+                if file_analysis['combined_csv_present']:
+                    risk_factors.append('Combined CSV from previous workflow detected')
+                if len(file_analysis['pdf_files']) > 1:
+                    risk_factors.append(f"Multiple PDF files ({len(file_analysis['pdf_files'])})")
+                if file_analysis['individual_csv_files']:
+                    risk_factors.append(f"Individual CSV files detected: {file_analysis['individual_csv_files']}")
+                if len(file_analysis['txt_files']) > 50:  # Excessive text files
+                    risk_factors.append(f"Excessive text files ({len(file_analysis['txt_files'])})")
+                
+                result['detailed_analysis'] = {
+                    'file_breakdown': file_analysis,
+                    'risk_factors': risk_factors,
+                    'contamination_severity': 'high' if file_analysis['combined_csv_present'] else 'medium'
+                }
+                
                 print(f"🧹 AUTO-CLEAN: Contamination detected in session {external_session_id}")
                 print(f"🧹 Found {len(existing_files)} files to remove: {existing_files}")
+                print(f"🧹 Risk factors: {risk_factors}")
                 
-                # Clean up all files
-                for file in existing_files:
-                    file_path = os.path.join(session_dir, file)
+                # **PRIORITY CLEANUP**: Remove most critical files first
+                cleanup_errors = []
+                
+                # 1. Remove combined_data.csv first (highest priority)
+                if file_analysis['combined_csv_present']:
+                    combined_csv_path = os.path.join(session_dir, OUTPUT_CSV_NAME)
                     try:
-                        os.remove(file_path)
-                        result['files_removed'].append(file)
-                        print(f"🧹 Removed: {file}")
+                        os.remove(combined_csv_path)
+                        result['files_removed'].append(OUTPUT_CSV_NAME)
+                        print(f"🗑️ PRIORITY: Removed contaminating {OUTPUT_CSV_NAME}")
                     except Exception as e:
-                        print(f"⚠️ Warning: Could not remove {file}: {str(e)}")
-                        result['errors'] = result.get('errors', [])
-                        result['errors'].append(f"Could not remove {file}: {str(e)}")
+                        error_msg = f"Failed to remove {OUTPUT_CSV_NAME}: {str(e)}"
+                        cleanup_errors.append(error_msg)
+                        print(f"⚠️ CRITICAL: {error_msg}")
+                
+                # 2. Remove individual CSV files (medium priority)
+                for csv_file in file_analysis['individual_csv_files']:
+                    csv_path = os.path.join(session_dir, csv_file)
+                    try:
+                        os.remove(csv_path)
+                        result['files_removed'].append(csv_file)
+                        print(f"🗑️ Removed individual CSV: {csv_file}")
+                    except Exception as e:
+                        error_msg = f"Failed to remove {csv_file}: {str(e)}"
+                        cleanup_errors.append(error_msg)
+                        print(f"⚠️ Warning: {error_msg}")
+                
+                # 3. Remove all other files
+                for file in existing_files:
+                    if file not in result['files_removed']:  # Skip already removed files
+                        file_path = os.path.join(session_dir, file)
+                        try:
+                            os.remove(file_path)
+                            result['files_removed'].append(file)
+                            print(f"🗑️ Removed: {file}")
+                        except Exception as e:
+                            error_msg = f"Failed to remove {file}: {str(e)}"
+                            cleanup_errors.append(error_msg)
+                            print(f"⚠️ Warning: {error_msg}")
+                
+                if cleanup_errors:
+                    result['errors'] = cleanup_errors
+                    result['status'] = 'partial_cleanup'
+                else:
+                    result['status'] = 'cleaned'
                 
                 result['cleanup_performed'] = True
-                result['status'] = 'cleaned'
                 
-                print(f"✅ AUTO-CLEAN: Session {external_session_id} cleaned successfully")
+                # **POST-CLEANUP VERIFICATION**
+                try:
+                    remaining_files = [f for f in os.listdir(session_dir) if not f.startswith('.')]
+                    result['post_cleanup_verification'] = {
+                        'directory_empty': len(remaining_files) == 0,
+                        'remaining_files': remaining_files,
+                        'cleanup_successful': len(remaining_files) == 0 and not cleanup_errors
+                    }
+                    
+                    if remaining_files:
+                        print(f"⚠️ Warning: {len(remaining_files)} files remain after cleanup: {remaining_files}")
+                    else:
+                        print(f"✅ Verification: Session directory is now completely clean")
+                        
+                except Exception as verify_error:
+                    result['post_cleanup_verification'] = {'error': str(verify_error)}
+                    print(f"⚠️ Could not verify cleanup: {str(verify_error)}")
+                
+                print(f"✅ AUTO-CLEAN: Session {external_session_id} cleanup completed")
             else:
                 result['status'] = 'already_clean'
+                result['detailed_analysis'] = {
+                    'file_breakdown': {'total_files': 0},
+                    'risk_factors': [],
+                    'contamination_severity': 'none'
+                }
                 print(f"✅ AUTO-CLEAN: Session {external_session_id} is already clean")
         else:
             result['status'] = 'no_directory'
+            result['detailed_analysis'] = {
+                'file_breakdown': {'total_files': 0},
+                'risk_factors': [],
+                'contamination_severity': 'none'
+            }
             print(f"ℹ️ AUTO-CLEAN: Session directory {external_session_id} does not exist")
+        
+        # **FINAL STATUS DETERMINATION**
+        if result['status'] == 'cleaned' and result.get('post_cleanup_verification', {}).get('cleanup_successful', False):
+            result['ready_for_processing'] = True
+            result['recommendation'] = 'Session is clean and ready for new workflow'
+        elif result['status'] == 'already_clean' or result['status'] == 'no_directory':
+            result['ready_for_processing'] = True
+            result['recommendation'] = 'Session is clean and ready for new workflow'
+        else:
+            result['ready_for_processing'] = False
+            result['recommendation'] = 'Manual cleanup may be required - check errors or call /clear-session'
         
         return jsonify(result)
         
