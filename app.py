@@ -326,19 +326,19 @@ def cleanup_old_files():
         print(f"Error during cleanup: {str(e)}")
 
 def get_or_create_session():
-    """Get existing processor or create new one with session management."""
-    # Check for action parameter to force new session creation
-    action = request.args.get('_action')
-    force_new_session = action == 'new_session'
+    """Get or create session directory and return processor instance."""
     
-    # Check for session ID in query parameters first (for external apps)
+    # Check if we're being asked to force a new session
+    force_new_session = request.args.get('_action') == 'new_session'
+    
+    # Get external session ID from query parameter
     external_session_id = request.args.get('_sid') or request.args.get('session_id')
     
     # If force new session is requested, always create a new session
     if force_new_session:
         processor = DataProcessor()  # Creates new session
         print(f"🆕 Force creating new session due to _action=new_session: {processor.session_id}")
-                return processor
+        return processor
     
     # **ENHANCED EXTERNAL SESSION HANDLING**
     if external_session_id:
@@ -369,7 +369,7 @@ def get_or_create_session():
             if contamination_detected:
                 status += " (⚠️ contamination detected)"
             print(f"{status}: {external_session_id}")
-            else:
+        else:
             print(f"🆕 Creating new external session: {external_session_id}")
         
         return processor
@@ -386,7 +386,7 @@ def get_or_create_session():
         internal_session_id = session['session_id']
         processor = DataProcessor(session_id=internal_session_id)
         print(f"♻️ Reusing internal session: {internal_session_id}")
-    return processor
+        return processor
 
 @app.route('/', methods=['GET'])
 def index():
