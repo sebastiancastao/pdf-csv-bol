@@ -804,12 +804,12 @@ def upload_csv():
             if 'file' in request.files:
                 file = request.files['file']
                 if file.filename != '':
-        if not allowed_file(file.filename, ALLOWED_CSV_EXTENSIONS):
-            return jsonify({'error': 'Invalid file type. Please upload a CSV or Excel file'}), 400
-            
-        filename = secure_filename(f"temp_{file.filename}")
-        file_path = os.path.join(processor.session_dir, filename)
-            file.save(file_path)
+                    if not allowed_file(file.filename, ALLOWED_CSV_EXTENSIONS):
+                        return jsonify({'error': 'Invalid file type. Please upload a CSV or Excel file'}), 400
+                    
+                    filename = secure_filename(f"temp_{file.filename}")
+                    file_path = os.path.join(processor.session_dir, filename)
+                    file.save(file_path)
                     print(f"✅ CSV file saved via multipart upload")
                     
             # Method 2: Handle JSON data with CSV content
@@ -888,16 +888,16 @@ def upload_csv():
             
             # Process the CSV file
             if file_path and os.path.exists(file_path):
-            success, message = process_csv_file(file_path, processor.session_dir)
-            
-            if not success:
-                return jsonify({'error': message}), 400
+                success, message = process_csv_file(file_path, processor.session_dir)
                 
-            return jsonify({
-                'message': 'CSV data mapped successfully',
+                if not success:
+                    return jsonify({'error': message}), 400
+                    
+                return jsonify({
+                    'message': 'CSV data mapped successfully',
                     'status': 'success',
                     'session_id': processor.session_id
-            }), 200
+                }), 200
             else:
                 return jsonify({'error': 'Failed to save CSV data'}), 500
             
