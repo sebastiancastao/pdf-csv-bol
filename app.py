@@ -479,12 +479,26 @@ def upload_file():
             existing_files = [f for f in os.listdir(processor.session_dir) if not f.startswith('.')]
             if existing_files:
                 print(f"🧹 Removing {len(existing_files)} existing files to prevent contamination")
-                for old_file in existing_files:
+                
+                # **CRITICAL FIX**: Explicitly remove combined_data.csv first to prevent contamination
+                combined_csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
+                if os.path.exists(combined_csv_path):
                     try:
-                        os.remove(os.path.join(processor.session_dir, old_file))
-                        print(f"🧹 Removed: {old_file}")
+                        os.remove(combined_csv_path)
+                        print(f"🗑️ PRIORITY: Removed contaminating {OUTPUT_CSV_NAME}")
                     except Exception as e:
-                        print(f"⚠️ Warning: Could not remove {old_file}: {str(e)}")
+                        print(f"⚠️ Warning: Could not remove {OUTPUT_CSV_NAME}: {str(e)}")
+                
+                # Remove all other files
+                for old_file in existing_files:
+                    if old_file != OUTPUT_CSV_NAME:  # Skip if already removed above
+                        try:
+                            file_path = os.path.join(processor.session_dir, old_file)
+                            if os.path.exists(file_path):  # Check if still exists
+                                os.remove(file_path)
+                                print(f"🧹 Removed: {old_file}")
+                        except Exception as e:
+                            print(f"⚠️ Warning: Could not remove {old_file}: {str(e)}")
             else:
                 print(f"✅ Session directory is already clean")
         else:
@@ -494,13 +508,35 @@ def upload_file():
                 print(f"⚠️ SESSION CONTAMINATION DETECTED in internal session!")
                 print(f"⚠️ Session {processor.session_id} contains existing files: {existing_files}")
                 
+                # **CRITICAL FIX**: Explicitly remove combined_data.csv first to prevent contamination
+                combined_csv_path = os.path.join(processor.session_dir, OUTPUT_CSV_NAME)
+                if os.path.exists(combined_csv_path):
+                    try:
+                        os.remove(combined_csv_path)
+                        print(f"🗑️ PRIORITY: Removed contaminating {OUTPUT_CSV_NAME}")
+                    except Exception as e:
+                        print(f"⚠️ Warning: Could not remove {OUTPUT_CSV_NAME}: {str(e)}")
+                
                 # Clean up existing files to prevent contamination
                 for old_file in existing_files:
-                    try:
-                        os.remove(os.path.join(processor.session_dir, old_file))
-                        print(f"🧹 Removed old file: {old_file}")
-                    except Exception as e:
-                        print(f"⚠️ Warning: Could not remove {old_file}: {str(e)}")
+                    if old_file != OUTPUT_CSV_NAME:  # Skip if already removed above
+                        try:
+                            file_path = os.path.join(processor.session_dir, old_file)
+                            if os.path.exists(file_path):  # Check if still exists
+                                os.remove(file_path)
+                                print(f"🧹 Removed old file: {old_file}")
+                        except Exception as e:
+                            print(f"⚠️ Warning: Could not remove {old_file}: {str(e)}")
+        
+        # **WORKFLOW TIMESTAMP**: Mark when this workflow started
+        workflow_start_time = time.time()
+        workflow_marker_path = os.path.join(processor.session_dir, '.workflow_start')
+        try:
+            with open(workflow_marker_path, 'w') as f:
+                f.write(str(workflow_start_time))
+            print(f"📝 Marked workflow start time: {workflow_start_time}")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not create workflow marker: {str(e)}")
         
         # Save the uploaded PDF directly to session directory
         filename = secure_filename(file.filename)
@@ -825,8 +861,19 @@ def upload_csv():
         contamination_detected = False
         contamination_reasons = []
         
+        # **WORKFLOW TIMING ANALYSIS**: Check if files are from current workflow
+        workflow_marker_path = os.path.join(processor.session_dir, '.workflow_start')
+        workflow_start_time = None
+        if os.path.exists(workflow_marker_path):
+            try:
+                with open(workflow_marker_path, 'r') as f:
+                    workflow_start_time = float(f.read().strip())
+                print(f"📝 Current workflow started at: {workflow_start_time}")
+            except Exception as e:
+                print(f"⚠️ Could not read workflow marker: {str(e)}")
+        
         # Check for signs of contamination
-        if len(session_files) > 5:  # More files than expected for a fresh workflow
+        if len(session_files) > 10:  # More files than expected for a fresh workflow (increased threshold)
             contamination_detected = True
             contamination_reasons.append(f'Excessive files detected ({len(session_files)} files)')
             validation_info['contamination_risk'] = 'high'
@@ -838,22 +885,55 @@ def upload_csv():
             contamination_reasons.append(f'Individual CSV files detected: {individual_csv_files}')
             validation_info['contamination_risk'] = 'medium'
         
-        # Check combined_data.csv modification time vs session creation
+        # **IMPROVED COMBINED_DATA.CSV ANALYSIS**: Check if it's from current workflow or contamination
         if pdf_data_exists:
             try:
                 csv_mtime = os.path.getmtime(combined_csv_path)
-                session_ctime = os.path.getctime(processor.session_dir)
-                time_diff = csv_mtime - session_ctime
                 
-                # If CSV is significantly older than session directory, it might be from a previous run
-                if time_diff < -60:  # CSV created more than 1 minute before session
-                    contamination_detected = True
-                    contamination_reasons.append(f'CSV file predates session by {abs(int(time_diff))} seconds')
-                    validation_info['contamination_risk'] = 'high'
+                # If we have a workflow marker, use it for comparison
+                if workflow_start_time is not None:
+                    time_diff = csv_mtime - workflow_start_time
+                    
+                    # If CSV was created BEFORE this workflow started, it's contamination
+                    if time_diff < -30:  # 30 second buffer for file system timing
+                        contamination_detected = True
+                        contamination_reasons.append(f'Combined CSV predates current workflow by {abs(int(time_diff))} seconds')
+                        validation_info['contamination_risk'] = 'high'
+                        print(f"🚫 CONTAMINATION: {OUTPUT_CSV_NAME} created before workflow (diff: {time_diff:.1f}s)")
+                    else:
+                        print(f"✅ LEGITIMATE: {OUTPUT_CSV_NAME} created after workflow start (diff: {time_diff:.1f}s)")
+                else:
+                    # Fallback: Use session directory creation time
+                    session_ctime = os.path.getctime(processor.session_dir)
+                    time_diff = csv_mtime - session_ctime
+                    
+                    # If CSV is significantly older than session directory, it might be from a previous run
+                    if time_diff < -120:  # 2 minutes buffer for session reuse
+                        contamination_detected = True
+                        contamination_reasons.append(f'Combined CSV predates session by {abs(int(time_diff))} seconds')
+                        validation_info['contamination_risk'] = 'high'
+                        print(f"🚫 CONTAMINATION: {OUTPUT_CSV_NAME} predates session (diff: {time_diff:.1f}s)")
+                    else:
+                        print(f"✅ ACCEPTABLE: {OUTPUT_CSV_NAME} timing relative to session (diff: {time_diff:.1f}s)")
                     
                 validation_info['csv_age_vs_session'] = int(time_diff)
             except Exception as time_error:
                 print(f"⚠️ Could not check file timestamps: {str(time_error)}")
+        
+        # **ADDITIONAL CONTAMINATION CHECKS**
+        # Check for multiple PDF files (indicates session reuse)
+        pdf_files = [f for f in session_files if f.lower().endswith('.pdf')]
+        if len(pdf_files) > 1:
+            contamination_detected = True
+            contamination_reasons.append(f'Multiple PDF files detected: {pdf_files}')
+            validation_info['contamination_risk'] = 'high'
+        
+        # Check for excessive text files (indicates multiple PDF processing runs)
+        txt_files = [f for f in session_files if f.lower().endswith('.txt')]
+        if len(txt_files) > 100:  # Very high threshold to avoid false positives
+            contamination_detected = True
+            contamination_reasons.append(f'Excessive text files detected ({len(txt_files)} files)')
+            validation_info['contamination_risk'] = 'medium'
         
         # **STRICT CONTAMINATION HANDLING FOR AUTOMATED WORKFLOWS**
         if contamination_detected and external_session_id:
@@ -1216,6 +1296,18 @@ def clear_session():
                             cleanup_result['errors'].append(error_msg)
                             print(f"⚠️ {error_msg}")
                     
+                    # **WORKFLOW MARKER CLEANUP**: Remove workflow marker files
+                    workflow_marker_path = os.path.join(session_dir, '.workflow_start')
+                    if os.path.exists(workflow_marker_path):
+                        try:
+                            os.remove(workflow_marker_path)
+                            cleanup_result['files_removed'].append('.workflow_start')
+                            print(f"🗑️ Removed workflow marker file")
+                        except Exception as marker_error:
+                            error_msg = f"Failed to remove workflow marker: {str(marker_error)}"
+                            cleanup_result['errors'].append(error_msg)
+                            print(f"⚠️ {error_msg}")
+                    
                     # List all files for logging before removal
                     try:
                         existing_files = [f for f in os.listdir(session_dir) if not f.startswith('.')]
@@ -1272,6 +1364,18 @@ def clear_session():
                                 print(f"🗑️ Explicitly removed contaminating file: {OUTPUT_CSV_NAME}")
                             except Exception as csv_error:
                                 error_msg = f"Failed to remove {OUTPUT_CSV_NAME}: {str(csv_error)}"
+                                cleanup_result['errors'].append(error_msg)
+                                print(f"⚠️ {error_msg}")
+                        
+                        # **WORKFLOW MARKER CLEANUP**: Remove workflow marker files
+                        workflow_marker_path = os.path.join(session_dir, '.workflow_start')
+                        if os.path.exists(workflow_marker_path):
+                            try:
+                                os.remove(workflow_marker_path)
+                                cleanup_result['files_removed'].append('.workflow_start')
+                                print(f"🗑️ Removed workflow marker file")
+                            except Exception as marker_error:
+                                error_msg = f"Failed to remove workflow marker: {str(marker_error)}"
                                 cleanup_result['errors'].append(error_msg)
                                 print(f"⚠️ {error_msg}")
                         
@@ -1386,6 +1490,12 @@ def new_session():
                         if os.path.exists(combined_csv_path):
                             os.remove(combined_csv_path)
                             print(f"🗑️ Explicitly removed contaminating {OUTPUT_CSV_NAME}")
+                        
+                        # **WORKFLOW MARKER CLEANUP**: Remove workflow marker files
+                        workflow_marker_path = os.path.join(session_dir, '.workflow_start')
+                        if os.path.exists(workflow_marker_path):
+                            os.remove(workflow_marker_path)
+                            print(f"🗑️ Explicitly removed workflow marker file")
                     
                     shutil.rmtree(session_dir)
                     print(f"🗑️ Cleaned existing session directory: {requested_session_id}")
@@ -2041,6 +2151,18 @@ def auto_clean_session():
                         print(f"🗑️ PRIORITY: Removed contaminating {OUTPUT_CSV_NAME}")
                     except Exception as e:
                         error_msg = f"Failed to remove {OUTPUT_CSV_NAME}: {str(e)}"
+                        cleanup_errors.append(error_msg)
+                        print(f"⚠️ CRITICAL: {error_msg}")
+                
+                # 1.5. Remove workflow marker files (highest priority)
+                workflow_marker_path = os.path.join(session_dir, '.workflow_start')
+                if os.path.exists(workflow_marker_path):
+                    try:
+                        os.remove(workflow_marker_path)
+                        result['files_removed'].append('.workflow_start')
+                        print(f"🗑️ PRIORITY: Removed workflow marker file")
+                    except Exception as e:
+                        error_msg = f"Failed to remove workflow marker: {str(e)}"
                         cleanup_errors.append(error_msg)
                         print(f"⚠️ CRITICAL: {error_msg}")
                 
