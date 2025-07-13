@@ -83,20 +83,20 @@ class PDFProcessor:
                             text = f"[Page {i+1} - No text content found]"
                         
                         text_path = os.path.join(self.session_dir, f"{i+1}.txt")
-                        
+                    
                         with open(text_path, 'w', encoding='utf-8') as text_file:
                             text_file.write(text)
-                            
-                        print(f"✅ Saved text from page {i+1} to {os.path.basename(text_path)}")
                         
+                        print(f"✅ Saved text from page {i+1} to {os.path.basename(text_path)}")
+                    
                         # Clear page from memory
                         if hasattr(page, 'flush_cache'):
                             page.flush_cache()
-                        
+                    
                         # Force garbage collection every few pages
                         if i % 5 == 0:
                             gc.collect()
-                            
+                        
                     except Exception as page_error:
                         print(f"⚠️ Error processing page {i+1}: {str(page_error)}")
                         # Continue with other pages

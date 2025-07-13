@@ -43,11 +43,9 @@ class DataProcessor:
             print(f"✅ Session directory ready: {self.session_dir}")
             
         except Exception as e:
-            print(f"❌ Failed to setup session directory: {str(e)}")
-            print(f"❌ Attempted path: {self.session_dir}")
-            print(f"❌ Base directory: {self.base_dir}")
-            print(f"❌ Current working directory: {os.getcwd()}")
-            raise Exception(f"Session directory setup failed: {str(e)}")
+            error_msg = f"Error setting up session directory: {str(e)}"
+            print(f"❌ {error_msg}")
+            raise Exception(error_msg)
 
     @staticmethod
     def cleanup_sessions():

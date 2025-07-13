@@ -119,9 +119,43 @@ def process_csv_file(file_path, session_dir):
         
         # Read existing combined CSV (from PDF processing) from session directory
         combined_csv_path = os.path.join(session_dir, OUTPUT_CSV_NAME)
+        
+        # **DEBUG INFO**: Log session directory contents
+        print(f"🔍 DEBUG: Session directory: {session_dir}")
+        print(f"🔍 DEBUG: Looking for combined CSV at: {combined_csv_path}")
+        
+        if os.path.exists(session_dir):
+            files_in_session = os.listdir(session_dir)
+            print(f"🔍 DEBUG: Files in session directory: {files_in_session}")
+        else:
+            print(f"❌ DEBUG: Session directory does not exist: {session_dir}")
+            return False, "Session directory not found"
+        
         if not os.path.exists(combined_csv_path):
-            return False, "No PDF data processed yet. Please process PDF first."
-        existing_df = pd.read_csv(combined_csv_path, dtype=str)
+            print(f"❌ DEBUG: Combined CSV not found at: {combined_csv_path}")
+            
+            # **ENHANCED BEHAVIOR**: Check if there are any CSV files from PDF processing
+            existing_csv_files = [f for f in os.listdir(session_dir) if f.endswith('.csv')]
+            if existing_csv_files:
+                print(f"🔍 DEBUG: Found other CSV files in session: {existing_csv_files}")
+                
+                # Try to use the first CSV file as the base
+                alternative_csv = os.path.join(session_dir, existing_csv_files[0])
+                print(f"🔄 DEBUG: Attempting to use alternative CSV file: {alternative_csv}")
+                
+                try:
+                    existing_df = pd.read_csv(alternative_csv, dtype=str)
+                    print(f"✅ DEBUG: Successfully read alternative CSV with {len(existing_df)} rows")
+                except Exception as e:
+                    print(f"❌ DEBUG: Failed to read alternative CSV: {str(e)}")
+                    return False, f"Could not read CSV file: {str(e)}"
+            else:
+                print(f"❌ DEBUG: No CSV files found in session directory")
+                return False, "No PDF data processed yet. Please process PDF first."
+        else:
+            print(f"✅ DEBUG: Found combined CSV file: {combined_csv_path}")
+            existing_df = pd.read_csv(combined_csv_path, dtype=str)
+            print(f"✅ DEBUG: Successfully read combined CSV with {len(existing_df)} rows")
         
         # Ensure matching columns exist in both DataFrames.
         matching_columns = ["Invoice No.", "Style", "Cartons", "Individual Pieces"]
@@ -378,7 +412,7 @@ def get_or_create_session():
             print("🔄 Falling back to creating a new session...")
             processor = DataProcessor()
             print(f"🆕 Fallback session created: {processor.session_id}")
-            return processor
+        return processor
     
     # For internal Flask sessions (web UI), use simple logic
     if 'session_id' not in session:

@@ -18,7 +18,7 @@ try:
         print("⚠️ OpenAI API key not configured - OpenAI features disabled")
 except Exception as e:
     client = None
-    print(f"⚠️ OpenAI initialization failed: {e} - OpenAI features disabled")
+    print(f"⚠️ OpenAI setup failed: {str(e)} - OpenAI features disabled")
 
 class PopplerNotFoundError(Exception):
     """Exception raised when Poppler is not found or not working properly."""
